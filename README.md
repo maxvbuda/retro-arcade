@@ -1,4 +1,4 @@
-# Max Arcade
+# Retro Arcade
 
 A retro browser arcade — classic games rebuilt in plain HTML5 Canvas + JavaScript, no dependencies, no build step.
 
