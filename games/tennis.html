@@ -19,7 +19,7 @@
     </div>
     <canvas id="game" width="480" height="620"></canvas>
     <div class="overlay-msg" id="msg">GET READY!</div>
-    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; hold a direction while swinging to aim &middot; UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; first to 6 games wins the match</p>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; hold a direction while swinging to aim &middot; UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; first to 4 games wins the match</p>
   </div>
 
   <script>
@@ -166,9 +166,10 @@
     }
 
     function checkSetWin() {
+      // Short set: first to 4 games (win by 2), decider at 4-4 -> first to 5.
       const a = games.player, b = games.cpu;
-      if ((a >= 6 && a - b >= 2) || a === 7) return 'player';
-      if ((b >= 6 && b - a >= 2) || b === 7) return 'cpu';
+      if ((a >= 4 && a - b >= 2) || a === 5) return 'player';
+      if ((b >= 4 && b - a >= 2) || b === 5) return 'cpu';
       return null;
     }
 
