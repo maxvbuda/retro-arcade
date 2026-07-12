@@ -5,6 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tennis — Retro Arcade</title>
   <link rel="stylesheet" href="../style.css" />
+  <style>
+    .hud span {
+      display: inline-block;
+      transition: color 0.15s ease;
+    }
+    .hud span.bump {
+      animation: score-bump 0.4s cubic-bezier(0.2, 1.6, 0.4, 1);
+      color: #fff;
+      text-shadow: 0 0 10px currentColor;
+    }
+    @keyframes score-bump {
+      0% { transform: scale(1); }
+      35% { transform: scale(1.9) translateY(-2px); }
+      100% { transform: scale(1); }
+    }
+    canvas { background: #06080f; }
+  </style>
 </head>
 <body>
   <header class="site-header">
@@ -93,6 +110,56 @@
     }
     function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
+    // ---- Visual systems: lighting, textures, juice ------------------------
+    const LIGHT = { x: -0.55, y: -0.83 }; // unit vector pointing toward the key light
+
+    function makeNoise(size) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      const img = g.createImageData(size, size);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.random() * 255;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+        img.data[i + 3] = 255;
+      }
+      g.putImageData(img, 0, 0);
+      return c;
+    }
+    const noiseTex = makeNoise(120);
+    const grainTex = makeNoise(150);
+    const noisePattern = ctx.createPattern(noiseTex, 'repeat');
+
+    let shake = 0, freezeTimer = 0, crowdFlash = 0, screenFlash = 0, ballSpin = 0;
+    let decals = [];
+
+    function kick(mag, freeze) {
+      shake = Math.max(shake, mag);
+      if (freeze) freezeTimer = Math.max(freezeTimer, freeze);
+    }
+
+    function addDecal(wx, wy) {
+      decals.push({ x: wx, y: wy, r: 5 + Math.random() * 3, life: 5, max: 5, rot: Math.random() * Math.PI });
+      if (decals.length > 40) decals.shift();
+    }
+
+    // Soft, distance-scaled contact shadow cast by the single key light.
+    function groundShadow(px, py, radius, heightPx, alpha) {
+      const off = heightPx * 0.55;
+      const sx = px - LIGHT.x * off; // light is upper-left, so shadows fall lower-right
+      const sy = py - LIGHT.y * off;
+      const blur = radius * (1 + heightPx / 150);
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.scale(1, 0.42);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, blur);
+      g.addColorStop(0, `rgba(4,10,26,${alpha})`);
+      g.addColorStop(1, 'rgba(4,10,26,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, blur, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+
     // ---- Effects (swing, ball trail, particles) ---------------------------
     let particles = [];
     let ballTrail = [];
@@ -150,12 +217,21 @@
       ballTrail = ballTrail.filter(tr => tr.life > 0);
       if (state === 'rally') {
         const pr = project(ball.x, ball.y, ball.z);
-        ballTrail.push({ x: pr.x, y: pr.y, r: 6 * pr.scale, life: 0.28 });
-        if (ballTrail.length > 16) ballTrail.shift();
+        const spd = Math.hypot(ball.vx, ball.vy);
+        // faster ball -> longer-lived, longer trail
+        ballTrail.push({ x: pr.x, y: pr.y, r: 6 * pr.scale, life: 0.16 + Math.min(0.22, spd / 1700) });
+        const cap = 10 + Math.floor(Math.min(20, spd / 38));
+        while (ballTrail.length > cap) ballTrail.shift();
+        ballSpin += (spd + Math.abs(ball.vz)) * dt * 0.02;
       }
 
       for (const ft of floatTexts) { ft.y -= 26 * dt; ft.life -= dt; }
       floatTexts = floatTexts.filter(ft => ft.life > 0);
+
+      for (const d of decals) d.life -= dt;
+      decals = decals.filter(d => d.life > 0);
+      if (crowdFlash > 0) crowdFlash = Math.max(0, crowdFlash - dt / 0.55);
+      if (screenFlash > 0) screenFlash = Math.max(0, screenFlash - dt / 0.4);
     }
 
     function pointsDisplay() {
@@ -168,10 +244,18 @@
       return n[Math.min(p, 3)] + '-' + n[Math.min(c, 3)];
     }
 
+    function setHud(el, value) {
+      if (el.textContent === String(value)) return;
+      el.textContent = value;
+      el.classList.remove('bump');
+      void el.offsetWidth; // restart the CSS animation
+      el.classList.add('bump');
+    }
+
     function updateHud() {
-      gamesEl.textContent = games.player + '-' + games.cpu;
-      pointsEl.textContent = pointsDisplay();
-      servingEl.textContent = server === 'player' ? 'YOU' : 'CPU';
+      setHud(gamesEl, games.player + '-' + games.cpu);
+      setHud(pointsEl, pointsDisplay());
+      setHud(servingEl, server === 'player' ? 'YOU' : 'CPU');
     }
 
     function checkSetWin() {
@@ -298,6 +382,8 @@
       applyShot(target, T, ball.z);
       triggerSwing(hitter);
       spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
+      const spd = Math.hypot(ball.vx, ball.vy);
+      kick(clamp(spd / 150, 1.5, 5), side === 'player' ? 0.035 : 0);
       state = 'rally';
     }
 
@@ -337,6 +423,8 @@
       state = 'point-pause';
       points[winnerSide]++;
       updateHud();
+      if (winnerSide === 'player') { crowdFlash = 1; screenFlash = 0.6; kick(4, 0); }
+      else crowdFlash = 0.4;
       const other = opponentOf(winnerSide);
       const diff = points[winnerSide] - points[other];
       const prefix = reason ? reason + ' — ' : '';
@@ -373,6 +461,7 @@
       if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
       player.x = clamp(player.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
       player.y = clamp(player.y + dy * MOVE_SPEED * dt, netY + 15, courtBottom + 20);
+      player.lean = (player.lean || 0) + (dx - (player.lean || 0)) * Math.min(1, dt * 8);
     }
 
     function updateCPU(dt) {
@@ -381,6 +470,8 @@
       const dx = targetX - cpu.x;
       const step = Math.sign(dx) * Math.min(Math.abs(dx), CPU_SPEED * dt);
       cpu.x = clamp(cpu.x + step, courtLeft - 20, courtRight + 20);
+      const leanTarget = Math.abs(dx) > 2 ? Math.sign(dx) : 0;
+      cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
 
       const desiredY = trackingBall ? clamp(ball.y - 6, courtTop - 15, netY - 25) : courtTop + 55;
       cpu.y = clamp(cpu.y + (desiredY - cpu.y) * Math.min(1, dt * 4), courtTop - 20, netY - 15);
@@ -408,6 +499,8 @@
       if (ball.z <= 0 && ball.vz < 0) {
         ball.z = 0;
         spawnPuff(ball.x, ball.y);
+        addDecal(ball.x, ball.y);
+        kick(Math.min(2.2, Math.abs(ball.vz) / 260), 0);
         handleBounce(ball.x, ball.y);
         if (state === 'rally') {
           ball.vz = -ball.vz * 0.55;
@@ -428,37 +521,93 @@
       }
     }
 
-    function drawBackground() {
-      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      g.addColorStop(0, '#0b1030');
-      g.addColorStop(0.45, '#131a44');
-      g.addColorStop(1, '#0a0f2a');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    function floodlight(baseX) {
+      // a tower with a lamp array up top and a soft volumetric cone onto the court
+      const topY = 8, poleTopY = 40;
+      ctx.strokeStyle = '#141a30'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(baseX, poleTopY + 60); ctx.lineTo(baseX, poleTopY); ctx.stroke();
 
-      // stadium floor behind the far baseline
+      // lamp housing
+      ctx.fillStyle = '#20263f';
+      ctx.fillRect(baseX - 20, topY, 40, 20);
+      const flick = 0.82 + 0.18 * Math.sin(Date.now() / 90 + baseX);
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = `rgba(255,250,220,${flick})`;
+        ctx.shadowColor = '#fff7d0'; ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(baseX - 15 + (i % 3) * 15, topY + 6 + Math.floor(i / 3) * 8, 2.4, 0, TAU);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // volumetric cone toward court center
+      const aim = P(courtCX, netY);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const cone = ctx.createLinearGradient(baseX, topY + 10, aim.x, aim.y);
+      cone.addColorStop(0, `rgba(255,248,214,${0.10 * flick})`);
+      cone.addColorStop(1, 'rgba(255,248,214,0)');
+      ctx.fillStyle = cone;
+      ctx.beginPath();
+      ctx.moveTo(baseX, topY + 10);
+      ctx.lineTo(aim.x - 150, aim.y);
+      ctx.lineTo(aim.x + 150, aim.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawBackground() {
+      // dusk sky (overscanned so screen-shake never reveals an edge)
+      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      g.addColorStop(0, '#0a0d28');
+      g.addColorStop(0.35, '#241a48');
+      g.addColorStop(0.62, '#5a2f5e');
+      g.addColorStop(0.72, '#b8563f');
+      g.addColorStop(0.85, '#1a1636');
+      ctx.fillStyle = g;
+      ctx.fillRect(-12, -12, canvas.width + 24, canvas.height + 24);
+
+      floodlight(46);
+      floodlight(canvas.width - 46);
+
+      // stadium bowl behind the far baseline
       const fl = P(courtLeft - 60, courtTop);
       const fr = P(courtRight + 60, courtTop);
       ctx.fillStyle = '#0d1338';
       ctx.beginPath();
-      ctx.moveTo(0, 0); ctx.lineTo(canvas.width, 0);
+      ctx.moveTo(-12, 58); ctx.lineTo(canvas.width + 12, 58);
       ctx.lineTo(fr.x, fr.y); ctx.lineTo(fl.x, fl.y);
       ctx.closePath(); ctx.fill();
 
-      // shimmering crowd
+      // shimmering crowd (with parallax rows + winner flash boost)
       const now = Date.now();
-      for (let r = 0; r < 5; r++) {
-        const yy = 24 + r * 16;
-        for (let c = 0; c < 34; c++) {
-          const xx = 14 + c * ((canvas.width - 28) / 33);
+      const boost = crowdFlash * 35;
+      for (let r = 0; r < 6; r++) {
+        const yy = 62 + r * 13;
+        const inset = 10 + r * 4;
+        const cols = 40 - r * 2;
+        for (let c = 0; c < cols; c++) {
+          const xx = inset + c * ((canvas.width - inset * 2) / (cols - 1));
           const tw = 0.5 + 0.5 * Math.sin(now / 400 + c * 1.7 + r);
           const hue = (c * 37 + r * 90) % 360;
-          ctx.fillStyle = `hsla(${hue},60%,${45 + tw * 20}%,0.7)`;
+          ctx.fillStyle = `hsla(${hue},60%,${40 + tw * 18 + boost}%,0.75)`;
           ctx.beginPath();
-          ctx.arc(xx, yy, 2.2, 0, TAU);
+          ctx.arc(xx, yy, 2 - r * 0.12, 0, TAU);
           ctx.fill();
         }
       }
+
+      // heat-shimmer band just above the far baseline
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 3; i++) {
+        const yy = fl.y - 6 - i * 4;
+        const a = 0.05 + 0.04 * Math.sin(now / 260 + i);
+        ctx.fillStyle = `rgba(180,200,255,${a})`;
+        ctx.fillRect(fl.x, yy + Math.sin(now / 300 + i) * 1.5, fr.x - fl.x, 3);
+      }
+      ctx.restore();
     }
 
     function drawCourtSurface() {
@@ -484,6 +633,29 @@
       ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
       ctx.closePath(); ctx.fill();
 
+      // surface grain: subtle noise texture clipped to the court
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(fl.x, fl.y); ctx.lineTo(fr.x, fr.y);
+      ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
+      ctx.closePath(); ctx.clip();
+      ctx.globalAlpha = 0.06;
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.fillStyle = noisePattern;
+      ctx.fillRect(0, fl.y - 4, canvas.width, nl.y - fl.y + 8);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ambient occlusion darkening toward the net line
+      const ny = P(courtCX, netY).y;
+      const ao = ctx.createLinearGradient(0, ny - 60, 0, ny + 60);
+      ao.addColorStop(0, 'rgba(0,0,10,0)');
+      ao.addColorStop(0.5, 'rgba(0,0,10,0.20)');
+      ao.addColorStop(1, 'rgba(0,0,10,0)');
+      ctx.fillStyle = ao;
+      ctx.fillRect(0, ny - 60, canvas.width, 120);
+      ctx.restore();
+
       // sheen
       const sh = ctx.createLinearGradient(0, fl.y, 0, nl.y);
       sh.addColorStop(0, 'rgba(255,255,255,0.10)');
@@ -495,11 +667,12 @@
       ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
       ctx.closePath(); ctx.fill();
 
-      // lines
+      // lines (with a faint painted-wear alpha wobble)
       ctx.lineJoin = 'round';
       function line(x1, y1, x2, y2, w) {
         const a = P(x1, y1), b = P(x2, y2);
-        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+        const wear = 0.82 + 0.12 * Math.sin(x1 * 0.7 + y1 * 0.3);
+        ctx.strokeStyle = `rgba(240,244,255,${wear})`;
         ctx.lineWidth = w;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
@@ -513,6 +686,20 @@
       line(courtCX, netY - so, courtCX, netY + so, 2);
       line(courtCX, courtTop, courtCX, courtTop + 10, 2);
       line(courtCX, courtBottom - 10, courtCX, courtBottom, 2.4);
+    }
+
+    function drawDecals() {
+      for (const d of decals) {
+        const pr = P(d.x, d.y);
+        const a = (d.life / d.max) * 0.3;
+        ctx.save();
+        ctx.translate(pr.x, pr.y);
+        ctx.scale(1, 0.5);
+        ctx.rotate(d.rot);
+        ctx.fillStyle = `rgba(18,34,74,${a})`;
+        ctx.beginPath(); ctx.ellipse(0, 0, d.r * pr.scale, d.r * pr.scale * 0.8, 0, 0, TAU); ctx.fill();
+        ctx.restore();
+      }
     }
 
     function drawReachHint() {
@@ -570,10 +757,15 @@
       const pr = P(p.x, p.y);
       const s = pr.scale, cx = pr.x, feet = pr.y;
 
-      ctx.fillStyle = 'rgba(0,0,0,0.32)';
-      ctx.beginPath();
-      ctx.ellipse(cx, feet, 16 * s, 6 * s, 0, 0, TAU);
-      ctx.fill();
+      // grounded soft shadow cast by the key light (stays on the court plane)
+      groundShadow(cx, feet, 15 * s, 30 * s, 0.34);
+
+      // running lean about the feet
+      const leanAngle = clamp((p.lean || 0) * 0.22, -0.24, 0.24);
+      ctx.save();
+      ctx.translate(cx, feet);
+      ctx.rotate(leanAngle);
+      ctx.translate(-cx, -feet);
 
       const bodyW = 17 * s, bodyH = 26 * s;
       const torsoCY = feet - 18 * s;
@@ -629,34 +821,69 @@
         ctx.beginPath(); ctx.moveTo(i * 3 * s, -7 * s); ctx.lineTo(i * 3 * s, 7 * s); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(-5 * s, i * 3.5 * s); ctx.lineTo(5 * s, i * 3.5 * s); ctx.stroke();
       }
-      ctx.restore();
+      ctx.restore(); // racket transform
+
+      ctx.restore(); // lean transform
     }
 
     function drawBallWithTrail() {
+      // speed trail — additive so it reads as a glowing streak
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
       for (const tr of ballTrail) {
-        const a = (tr.life / 0.28) * 0.4;
-        ctx.fillStyle = `rgba(232,255,46,${a})`;
-        ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r * (0.5 + tr.life), 0, TAU); ctx.fill();
+        const a = Math.max(0, tr.life) * 1.1;
+        ctx.fillStyle = `rgba(180,255,70,${a * 0.35})`;
+        ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r * (0.5 + tr.life * 1.4), 0, TAU); ctx.fill();
       }
+      ctx.restore();
 
+      // grounded contact shadow (offset + softened by ball height)
       const gp = P(ball.x, ball.y);
-      const hFade = Math.max(0.25, 1 - ball.z / 240);
-      ctx.fillStyle = `rgba(0,0,0,${0.4 * hFade})`;
-      ctx.beginPath();
-      ctx.ellipse(gp.x, gp.y, 6 * gp.scale * hFade, 3 * gp.scale * hFade, 0, 0, TAU);
-      ctx.fill();
+      const hPx = ball.z * gp.scale * HEIGHT_K;
+      groundShadow(gp.x, gp.y, 5 * gp.scale, hPx, Math.max(0.12, 0.4 - ball.z / 500));
 
       const bp = project(ball.x, ball.y, ball.z);
       const r = 6 * bp.scale;
-      const rg = ctx.createRadialGradient(bp.x - r * 0.3, bp.y - r * 0.3, r * 0.2, bp.x, bp.y, r);
-      rg.addColorStop(0, '#f7ffb0');
-      rg.addColorStop(1, '#c9e000');
+
+      // motion-blur stretch along screen-space velocity
+      const ahead = project(ball.x + ball.vx * 0.02, ball.y + ball.vy * 0.02, Math.max(0, ball.z + ball.vz * 0.02));
+      const dxs = ahead.x - bp.x, dys = ahead.y - bp.y;
+      const sspeed = Math.hypot(dxs, dys);
+      const ang = sspeed > 0.5 ? Math.atan2(dys, dxs) : 0;
+      const stretch = 1 + Math.min(1.5, sspeed / 5);
+
+      // bloom halo
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const halo = ctx.createRadialGradient(bp.x, bp.y, 0, bp.x, bp.y, r * 2.6);
+      halo.addColorStop(0, `rgba(210,255,90,${0.35 + Math.min(0.35, sspeed / 20)})`);
+      halo.addColorStop(1, 'rgba(210,255,90,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(bp.x, bp.y, r * 2.6, 0, TAU); ctx.fill();
+      ctx.restore();
+
+      // fuzzy-felt ball body, stretched + spinning
+      ctx.save();
+      ctx.translate(bp.x, bp.y);
+      ctx.rotate(ang);
+      ctx.scale(stretch, 1);
+      ctx.rotate(-ang + ballSpin);
+      const rg = ctx.createRadialGradient(-r * 0.32, -r * 0.32, r * 0.15, 0, 0, r);
+      rg.addColorStop(0, '#f8ffc0');
+      rg.addColorStop(0.7, '#d8ee18');
+      rg.addColorStop(1, '#a9c400');
       ctx.fillStyle = rg;
-      ctx.shadowColor = '#e8ff2e'; ctx.shadowBlur = 8;
-      ctx.beginPath(); ctx.arc(bp.x, bp.y, r, 0, TAU); ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(bp.x, bp.y, r, -0.6, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+
+      // felt seam
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1.1;
+      ctx.beginPath(); ctx.arc(-r * 0.2, 0, r * 1.15, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(r * 0.2, 0, r * 1.15, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+
+      // specular highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.35, r * 0.22, 0, TAU); ctx.fill();
+      ctx.restore();
     }
 
     function drawParticles() {
@@ -692,9 +919,52 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
+    function drawChromatic() {
+      // subtle red/cyan fringe at the frame edges
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      const ring = (color, dx) => {
+        const g = ctx.createRadialGradient(
+          canvas.width / 2 + dx, canvas.height / 2, canvas.height * 0.42,
+          canvas.width / 2 + dx, canvas.height / 2, canvas.height * 0.6);
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(1, color);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      };
+      ring('rgba(255,40,40,0.05)', -2.5);
+      ring('rgba(40,220,255,0.05)', 2.5);
+      ctx.restore();
+    }
+
+    let grainOff = 0;
+    function drawGrain() {
+      grainOff = (grainOff + 7) % 40;
+      ctx.save();
+      ctx.globalAlpha = 0.035;
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.drawImage(grainTex, -grainOff, -grainOff, canvas.width + 40, canvas.height + 40);
+      ctx.restore();
+    }
+
+    function drawFlash() {
+      if (screenFlash <= 0) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,250,220,${screenFlash * 0.28})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
     function draw() {
+      const sx = (Math.random() * 2 - 1) * shake;
+      const sy = (Math.random() * 2 - 1) * shake;
+      ctx.save();
+      ctx.translate(sx, sy);
+
       drawBackground();
       drawCourtSurface();
+      drawDecals();
       drawReachHint();
 
       // painter's algorithm: far objects first so near ones occlude them
@@ -709,7 +979,14 @@
 
       drawParticles();
       drawFloatTexts();
+
+      ctx.restore(); // end screen-shake transform
+
+      // screen-space post-processing (never shaken)
+      drawFlash();
       drawVignette();
+      drawChromatic();
+      drawGrain();
     }
 
     let lastTime = performance.now();
@@ -717,7 +994,16 @@
       let dt = (now - lastTime) / 1000;
       lastTime = now;
       dt = Math.min(dt, 0.05);
-      if (!paused) { update(dt); updateFx(dt); }
+      if (!paused) {
+        if (freezeTimer > 0) {
+          // brief hit-freeze: hold the simulation for a few frames of impact
+          freezeTimer -= dt;
+        } else {
+          update(dt);
+          updateFx(dt);
+        }
+        shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
+      }
       draw();
       requestAnimationFrame(loop);
     }
