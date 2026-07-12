@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Breakout — Max Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">BREAKOUT</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>SCORE <span id="score">0</span></div>
+      <div>LIVES <span id="lives">3</span></div>
+    </div>
+    <canvas id="game" width="480" height="420"></canvas>
+    <div class="overlay-msg" id="msg"></div>
+    <p class="hint">MOUSE or ARROW LEFT/RIGHT or A/D to move paddle &middot; SPACE to launch &middot; R to restart</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const msgEl = document.getElementById('msg');
+
+    const paddleW = 90, paddleH = 12;
+    const ballR = 7;
+    const rows = 6, cols = 9;
+    const brickW = 46, brickH = 18, brickPad = 4, brickTop = 40, brickLeft = (W - (cols * (brickW + brickPad) - brickPad)) / 2;
+    const colors = ['#ff2e88', '#ffe62e', '#2eff88', '#2ee8ff', '#ff8a2e', '#c02eff'];
+
+    let paddle, ball, bricks, score, lives, launched, over, keys;
+
+    function makeBricks() {
+      const b = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          b.push({
+            x: brickLeft + c * (brickW + brickPad),
+            y: brickTop + r * (brickH + brickPad),
+            alive: true,
+            color: colors[r % colors.length],
+          });
+        }
+      }
+      return b;
+    }
+
+    function resetBall() {
+      launched = false;
+      ball = { x: paddle.x + paddle.w / 2, y: paddle.y - ballR - 1, vx: 0, vy: 0 };
+    }
+
+    function reset() {
+      paddle = { x: W / 2 - paddleW / 2, y: H - 30, w: paddleW, h: paddleH };
+      bricks = makeBricks();
+      score = 0;
+      lives = 3;
+      over = false;
+      keys = {};
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      msgEl.textContent = '';
+      resetBall();
+    }
+
+    function launch() {
+      if (launched || over) return;
+      launched = true;
+      ball.vx = (Math.random() * 4 - 2) || 3;
+      ball.vy = -5;
+    }
+
+    function update() {
+      if (over) return;
+
+      if (keys['arrowleft'] || keys['a']) paddle.x -= 7;
+      if (keys['arrowright'] || keys['d']) paddle.x += 7;
+      paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+
+      if (!launched) {
+        ball.x = paddle.x + paddle.w / 2;
+        return;
+      }
+
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      if (ball.x - ballR < 0) { ball.x = ballR; ball.vx *= -1; }
+      if (ball.x + ballR > W) { ball.x = W - ballR; ball.vx *= -1; }
+      if (ball.y - ballR < 0) { ball.y = ballR; ball.vy *= -1; }
+
+      if (ball.y + ballR > H) {
+        lives--;
+        livesEl.textContent = lives;
+        if (lives <= 0) {
+          over = true;
+          msgEl.textContent = 'GAME OVER — press R to restart';
+        } else {
+          resetBall();
+        }
+        return;
+      }
+
+      if (ball.vy > 0 &&
+          ball.y + ballR > paddle.y &&
+          ball.y + ballR < paddle.y + paddle.h + 10 &&
+          ball.x > paddle.x && ball.x < paddle.x + paddle.w) {
+        ball.y = paddle.y - ballR;
+        const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+        ball.vx = hit * 6;
+        ball.vy = -Math.abs(ball.vy);
+      }
+
+      for (const brick of bricks) {
+        if (!brick.alive) continue;
+        if (ball.x + ballR > brick.x && ball.x - ballR < brick.x + brickW &&
+            ball.y + ballR > brick.y && ball.y - ballR < brick.y + brickH) {
+          brick.alive = false;
+          score += 10;
+          scoreEl.textContent = score;
+
+          const overlapLeft = (ball.x + ballR) - brick.x;
+          const overlapRight = (brick.x + brickW) - (ball.x - ballR);
+          const overlapTop = (ball.y + ballR) - brick.y;
+          const overlapBottom = (brick.y + brickH) - (ball.y - ballR);
+          const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+          if (minOverlap === overlapTop || minOverlap === overlapBottom) ball.vy *= -1;
+          else ball.vx *= -1;
+          break;
+        }
+      }
+
+      if (bricks.every(b => !b.alive)) {
+        over = true;
+        msgEl.textContent = 'YOU WIN — press R to restart';
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      for (const brick of bricks) {
+        if (!brick.alive) continue;
+        ctx.fillStyle = brick.color;
+        ctx.shadowColor = brick.color;
+        ctx.shadowBlur = 6;
+        ctx.fillRect(brick.x, brick.y, brickW, brickH);
+      }
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#2ee8ff';
+      ctx.shadowColor = '#2ee8ff';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+
+      ctx.fillStyle = '#ffe62e';
+      ctx.shadowColor = '#ffe62e';
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ballR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      keys[k] = true;
+      if (['arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+      if (k === ' ') launch();
+      if (k === 'r') reset();
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scale = W / rect.width;
+      const x = (e.clientX - rect.left) * scale;
+      paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
+    });
+    canvas.addEventListener('click', launch);
+
+    reset();
+    loop();
+  </script>
+</body>
+</html>

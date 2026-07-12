@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Space Invaders — Max Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">INVADERS</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>SCORE <span id="score">0</span></div>
+      <div>LIVES <span id="lives">3</span></div>
+      <div>WAVE <span id="wave">1</span></div>
+    </div>
+    <canvas id="game" width="480" height="440"></canvas>
+    <div class="overlay-msg" id="msg"></div>
+    <p class="hint">LEFT/RIGHT or A/D to move &middot; SPACE to shoot &middot; R to restart</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const waveEl = document.getElementById('wave');
+    const msgEl = document.getElementById('msg');
+
+    const shipW = 34, shipH = 16;
+    const invW = 28, invH = 18;
+    const invRows = 4, invCols = 9;
+
+    let ship, bullets, enemyBullets, invaders, invDir, invSpeed, score, lives, wave, over, keys, shootCooldown, enemyShootTimer;
+
+    function makeInvaders() {
+      const list = [];
+      const startX = (W - (invCols * (invW + 12) - 12)) / 2;
+      for (let r = 0; r < invRows; r++) {
+        for (let c = 0; c < invCols; c++) {
+          list.push({
+            x: startX + c * (invW + 12),
+            y: 50 + r * (invH + 14),
+            alive: true,
+            color: ['#ff2e88', '#ffe62e', '#2eff88', '#2ee8ff'][r % 4],
+          });
+        }
+      }
+      return list;
+    }
+
+    function reset(newWave) {
+      if (!newWave) {
+        score = 0; lives = 3; wave = 1;
+      }
+      ship = { x: W / 2 - shipW / 2, y: H - 36 };
+      bullets = [];
+      enemyBullets = [];
+      invaders = makeInvaders();
+      invDir = 1;
+      invSpeed = 0.6 + (wave - 1) * 0.25;
+      over = false;
+      keys = {};
+      shootCooldown = 0;
+      enemyShootTimer = 0;
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      waveEl.textContent = wave;
+      msgEl.textContent = '';
+    }
+
+    function shoot() {
+      if (shootCooldown > 0 || over) return;
+      bullets.push({ x: ship.x + shipW / 2 - 2, y: ship.y - 10 });
+      shootCooldown = 18;
+    }
+
+    function update() {
+      if (over) return;
+
+      if (keys['arrowleft'] || keys['a']) ship.x -= 6;
+      if (keys['arrowright'] || keys['d']) ship.x += 6;
+      ship.x = Math.max(0, Math.min(W - shipW, ship.x));
+      if (shootCooldown > 0) shootCooldown--;
+
+      bullets.forEach(b => b.y -= 8);
+      bullets = bullets.filter(b => b.y > -10);
+
+      enemyBullets.forEach(b => b.y += 4.5);
+      enemyBullets = enemyBullets.filter(b => b.y < H + 10);
+
+      const alive = invaders.filter(i => i.alive);
+      let hitEdge = false;
+      for (const inv of alive) {
+        if (inv.x + invDir * invSpeed < 0 || inv.x + invW + invDir * invSpeed > W) {
+          hitEdge = true;
+          break;
+        }
+      }
+      if (hitEdge) {
+        invDir *= -1;
+        invaders.forEach(i => { if (i.alive) i.y += 14; });
+      } else {
+        invaders.forEach(i => { if (i.alive) i.x += invDir * invSpeed; });
+      }
+
+      enemyShootTimer++;
+      const shootRate = Math.max(20, 55 - wave * 4);
+      if (enemyShootTimer > shootRate && alive.length) {
+        enemyShootTimer = 0;
+        const shooter = alive[Math.floor(Math.random() * alive.length)];
+        enemyBullets.push({ x: shooter.x + invW / 2 - 2, y: shooter.y + invH });
+      }
+
+      for (const b of bullets) {
+        for (const inv of invaders) {
+          if (!inv.alive) continue;
+          if (b.x < inv.x + invW && b.x + 4 > inv.x && b.y < inv.y + invH && b.y + 10 > inv.y) {
+            inv.alive = false;
+            b.y = -100;
+            score += 10 * wave;
+            scoreEl.textContent = score;
+          }
+        }
+      }
+
+      for (const b of enemyBullets) {
+        if (b.x < ship.x + shipW && b.x + 4 > ship.x && b.y < ship.y + shipH && b.y + 10 > ship.y) {
+          b.y = H + 100;
+          lives--;
+          livesEl.textContent = lives;
+          if (lives <= 0) {
+            over = true;
+            msgEl.textContent = 'GAME OVER — press R to restart';
+          }
+        }
+      }
+
+      for (const inv of invaders) {
+        if (inv.alive && inv.y + invH >= ship.y) {
+          over = true;
+          msgEl.textContent = 'GAME OVER — invaders landed — press R to restart';
+        }
+      }
+
+      if (invaders.every(i => !i.alive) && !over) {
+        wave++;
+        reset(true);
+        waveEl.textContent = wave;
+        msgEl.textContent = 'WAVE ' + wave + '!';
+        setTimeout(() => { if (!over) msgEl.textContent = ''; }, 1200);
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = '#2ee8ff';
+      ctx.shadowColor = '#2ee8ff';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(ship.x, ship.y, shipW, shipH);
+      ctx.fillRect(ship.x + shipW / 2 - 3, ship.y - 8, 6, 8);
+
+      ctx.fillStyle = '#ffe62e';
+      ctx.shadowColor = '#ffe62e';
+      bullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 10));
+
+      ctx.fillStyle = '#ff2e88';
+      ctx.shadowColor = '#ff2e88';
+      enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 10));
+
+      invaders.forEach(inv => {
+        if (!inv.alive) return;
+        ctx.fillStyle = inv.color;
+        ctx.shadowColor = inv.color;
+        ctx.fillRect(inv.x, inv.y, invW, invH);
+      });
+      ctx.shadowBlur = 0;
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      keys[k] = true;
+      if (['arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+      if (k === ' ') shoot();
+      if (k === 'r') reset(false);
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+    reset(false);
+    loop();
+  </script>
+</body>
+</html>

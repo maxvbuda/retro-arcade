@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pong — Max Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">PONG</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>YOU <span id="p1">0</span></div>
+      <div>CPU <span id="p2">0</span></div>
+    </div>
+    <canvas id="game" width="560" height="360"></canvas>
+    <div class="overlay-msg" id="msg"></div>
+    <p class="hint">MOUSE or ARROW UP/DOWN or W/S to move your paddle &middot; first to 7 wins &middot; R to restart</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const paddleW = 10, paddleH = 70;
+
+    const p1El = document.getElementById('p1');
+    const p2El = document.getElementById('p2');
+    const msgEl = document.getElementById('msg');
+
+    let player, cpu, ball, keys, over;
+
+    function reset() {
+      player = { y: H / 2 - paddleH / 2, score: 0 };
+      cpu = { y: H / 2 - paddleH / 2, score: 0 };
+      keys = {};
+      over = false;
+      msgEl.textContent = '';
+      p1El.textContent = 0;
+      p2El.textContent = 0;
+      resetBall(1);
+    }
+
+    function resetBall(dir) {
+      ball = {
+        x: W / 2, y: H / 2,
+        vx: 5 * dir, vy: (Math.random() * 4 - 2) || 3,
+        r: 7
+      };
+    }
+
+    function update() {
+      if (over) return;
+
+      if (keys['arrowup'] || keys['w']) player.y -= 6;
+      if (keys['arrowdown'] || keys['s']) player.y += 6;
+      player.y = Math.max(0, Math.min(H - paddleH, player.y));
+
+      const cpuCenter = cpu.y + paddleH / 2;
+      const target = ball.y;
+      const cpuSpeed = 4.6;
+      if (cpuCenter < target - 10) cpu.y += cpuSpeed;
+      else if (cpuCenter > target + 10) cpu.y -= cpuSpeed;
+      cpu.y = Math.max(0, Math.min(H - paddleH, cpu.y));
+
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy *= -1; }
+      if (ball.y + ball.r > H) { ball.y = H - ball.r; ball.vy *= -1; }
+
+      if (ball.vx < 0 && ball.x - ball.r < paddleW &&
+          ball.y > player.y && ball.y < player.y + paddleH) {
+        ball.x = paddleW + ball.r;
+        ball.vx *= -1.06;
+        const hit = (ball.y - (player.y + paddleH / 2)) / (paddleH / 2);
+        ball.vy = hit * 6;
+      }
+
+      if (ball.vx > 0 && ball.x + ball.r > W - paddleW &&
+          ball.y > cpu.y && ball.y < cpu.y + paddleH) {
+        ball.x = W - paddleW - ball.r;
+        ball.vx *= -1.06;
+        const hit = (ball.y - (cpu.y + paddleH / 2)) / (paddleH / 2);
+        ball.vy = hit * 6;
+      }
+
+      if (ball.x < 0) {
+        cpu.score++;
+        p2El.textContent = cpu.score;
+        checkWin();
+        if (!over) resetBall(1);
+      } else if (ball.x > W) {
+        player.score++;
+        p1El.textContent = player.score;
+        checkWin();
+        if (!over) resetBall(-1);
+      }
+    }
+
+    function checkWin() {
+      if (player.score >= 7) {
+        over = true;
+        msgEl.textContent = 'YOU WIN — press R to restart';
+      } else if (cpu.score >= 7) {
+        over = true;
+        msgEl.textContent = 'CPU WINS — press R to restart';
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = 'rgba(46,232,255,0.3)';
+      ctx.setLineDash([8, 10]);
+      ctx.beginPath();
+      ctx.moveTo(W / 2, 0);
+      ctx.lineTo(W / 2, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#2ee8ff';
+      ctx.shadowColor = '#2ee8ff';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(0, player.y, paddleW, paddleH);
+      ctx.fillStyle = '#ff2e88';
+      ctx.shadowColor = '#ff2e88';
+      ctx.fillRect(W - paddleW, cpu.y, paddleW, paddleH);
+
+      ctx.fillStyle = '#ffe62e';
+      ctx.shadowColor = '#ffe62e';
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (['arrowup', 'arrowdown'].includes(e.key.toLowerCase())) e.preventDefault();
+      if (e.key.toLowerCase() === 'r') reset();
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scale = H / rect.height;
+      const y = (e.clientY - rect.top) * scale;
+      player.y = Math.max(0, Math.min(H - paddleH, y - paddleH / 2));
+    });
+
+    reset();
+    loop();
+  </script>
+</body>
+</html>

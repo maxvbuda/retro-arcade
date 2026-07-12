@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Snake — Max Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">SNAKE</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>SCORE <span id="score">0</span></div>
+      <div>BEST <span id="best">0</span></div>
+    </div>
+    <canvas id="game" width="400" height="400"></canvas>
+    <div class="overlay-msg" id="msg"></div>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to pause &middot; R to restart</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const cell = 20;
+    const cols = canvas.width / cell;
+    const rows = canvas.height / cell;
+
+    const scoreEl = document.getElementById('score');
+    const bestEl = document.getElementById('best');
+    const msgEl = document.getElementById('msg');
+
+    let best = Number(localStorage.getItem('snake-best') || 0);
+    bestEl.textContent = best;
+
+    let snake, dir, nextDir, food, score, paused, gameOver, tickMs, timer;
+
+    function rand(n) { return Math.floor(Math.random() * n); }
+
+    function placeFood() {
+      let pos;
+      do {
+        pos = { x: rand(cols), y: rand(rows) };
+      } while (snake.some(s => s.x === pos.x && s.y === pos.y));
+      food = pos;
+    }
+
+    function reset() {
+      snake = [{ x: 8, y: 10 }, { x: 7, y: 10 }, { x: 6, y: 10 }];
+      dir = { x: 1, y: 0 };
+      nextDir = dir;
+      score = 0;
+      paused = false;
+      gameOver = false;
+      tickMs = 110;
+      scoreEl.textContent = score;
+      msgEl.textContent = '';
+      placeFood();
+      if (timer) clearInterval(timer);
+      timer = setInterval(tick, tickMs);
+    }
+
+    function tick() {
+      if (paused || gameOver) return;
+      dir = nextDir;
+      const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+      if (head.x < 0 || head.x >= cols || head.y < 0 || head.y >= rows ||
+          snake.some(s => s.x === head.x && s.y === head.y)) {
+        endGame();
+        return;
+      }
+
+      snake.unshift(head);
+
+      if (head.x === food.x && head.y === food.y) {
+        score++;
+        scoreEl.textContent = score;
+        if (score > best) {
+          best = score;
+          bestEl.textContent = best;
+          localStorage.setItem('snake-best', best);
+        }
+        placeFood();
+        if (tickMs > 55 && score % 3 === 0) {
+          tickMs -= 6;
+          clearInterval(timer);
+          timer = setInterval(tick, tickMs);
+        }
+      } else {
+        snake.pop();
+      }
+
+      draw();
+    }
+
+    function endGame() {
+      gameOver = true;
+      clearInterval(timer);
+      msgEl.textContent = 'GAME OVER — press R to restart';
+    }
+
+    function draw() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#ff2e88';
+      ctx.shadowColor = '#ff2e88';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(food.x * cell + 2, food.y * cell + 2, cell - 4, cell - 4);
+      ctx.shadowBlur = 0;
+
+      snake.forEach((s, i) => {
+        ctx.fillStyle = i === 0 ? '#ffe62e' : '#2eff88';
+        ctx.shadowColor = i === 0 ? '#ffe62e' : '#2eff88';
+        ctx.shadowBlur = 6;
+        ctx.fillRect(s.x * cell + 1, s.y * cell + 1, cell - 2, cell - 2);
+      });
+      ctx.shadowBlur = 0;
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+
+      if (k === 'r') { reset(); return; }
+      if (k === ' ') {
+        if (!gameOver) {
+          paused = !paused;
+          msgEl.textContent = paused ? 'PAUSED' : '';
+        }
+        return;
+      }
+
+      const up = { x: 0, y: -1 }, down = { x: 0, y: 1 }, left = { x: -1, y: 0 }, right = { x: 1, y: 0 };
+      let want = null;
+      if (k === 'arrowup' || k === 'w') want = up;
+      else if (k === 'arrowdown' || k === 's') want = down;
+      else if (k === 'arrowleft' || k === 'a') want = left;
+      else if (k === 'arrowright' || k === 'd') want = right;
+      if (!want) return;
+      if (want.x === -dir.x && want.y === -dir.y) return;
+      nextDir = want;
+    });
+
+    reset();
+    draw();
+  </script>
+</body>
+</html>
