@@ -275,9 +275,11 @@
     }
 
     function rallyFlightTime(hitter) {
+      // Flight time = how long the ball takes to cross the court, so bigger is
+      // slower. A clean strike (high quality) is a bit quicker than a stretch.
       const dist = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
       const quality = clamp(1 - dist / REACH, 0, 1);
-      return 0.85 - quality * 0.3;
+      return 1.2 - quality * 0.35;
     }
 
     function doHit(side, isServe) {
@@ -292,7 +294,7 @@
       bounceCount = 0;
       lastHitter = side;
       const target = isServe ? serveTarget(side) : (side === 'player' ? playerChooseShot() : cpuChooseShot());
-      const T = isServe ? 0.85 : rallyFlightTime(hitter);
+      const T = isServe ? 1.05 : rallyFlightTime(hitter);
       applyShot(target, T, ball.z);
       triggerSwing(hitter);
       spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
