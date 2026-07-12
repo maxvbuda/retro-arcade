@@ -967,11 +967,14 @@
       drawDecals();
       drawReachHint();
 
-      // painter's algorithm: far objects first so near ones occlude them
+      // painter's algorithm: far objects first so near ones occlude them.
+      // The ball's sort key is biased by its height so a lofted ball reads as
+      // being in front of a player it's flying past, instead of behind them.
+      const ballSortY = ball.y + Math.min(ball.z, 80) * 0.9;
       const items = [
         { y: cpu.y, fn: () => drawPlayer(cpu, CPU_COLORS, false) },
         { y: netY, fn: drawNet },
-        { y: ball.y, fn: drawBallWithTrail },
+        { y: ballSortY, fn: drawBallWithTrail },
         { y: player.y, fn: () => drawPlayer(player, PLAYER_COLORS, true) },
       ];
       items.sort((a, b) => a.y - b.y);
