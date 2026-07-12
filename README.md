@@ -19,6 +19,8 @@ Then go to `http://localhost:8000`.
 - **Breakout** — smash every brick, don't drop the ball.
 - **Tetris** — stack the blocks, clear the lines.
 - **Space Invaders** — defend Earth across escalating waves.
+- **Pac-Man** — clear a freshly generated maze every game, dodge four ghosts with distinct chase behaviors, and hunt them back down with power pellets.
+- **Tennis** — rally against the CPU with real serve/fault rules, deuce scoring, and directional aiming; first to 6 games wins the match.
 
 ## Stack
 

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tennis — Retro Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">TENNIS</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>GAMES <span id="games">0-0</span></div>
+      <div>POINTS <span id="points">0-0</span></div>
+      <div>SERVING <span id="serving">YOU</span></div>
+    </div>
+    <canvas id="game" width="420" height="520"></canvas>
+    <div class="overlay-msg" id="msg">GET READY!</div>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; hold a direction while swinging to aim &middot; UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; first to 6 games wins the match</p>
+  </div>
+
+  <script>
+  (function () {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const gamesEl = document.getElementById('games');
+    const pointsEl = document.getElementById('points');
+    const servingEl = document.getElementById('serving');
+    const msgEl = document.getElementById('msg');
+
+    const courtLeft = 60, courtRight = 360, courtTop = 50, courtBottom = 470;
+    const netY = (courtTop + courtBottom) / 2;
+    const courtCX = (courtLeft + courtRight) / 2;
+
+    const REACH = 42, MAX_REACH_Z = 90;
+    const GRAVITY = 850, NET_HEIGHT = 24;
+    const MOVE_SPEED = 190, CPU_SPEED = 170;
+
+    let keys = {};
+    let paused = false;
+    let state = 'point-pause'; // 'serving' | 'rally' | 'point-pause' | 'match-over'
+    let server = 'player';
+    let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
+    let bounceCount = 0, lastHitter = null;
+    let games = { player: 0, cpu: 0 };
+    let points = { player: 0, cpu: 0 };
+
+    const player = { x: courtCX, y: courtBottom - 30 };
+    const cpu = { x: courtCX, y: courtTop + 55 };
+    const ball = { x: courtCX, y: courtBottom - 45, z: 45, vx: 0, vy: 0, vz: 0 };
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function opponentOf(side) { return side === 'player' ? 'cpu' : 'player'; }
+
+    function pointsDisplay() {
+      const p = points.player, c = points.cpu;
+      if (p >= 3 && c >= 3) {
+        if (p === c) return 'DEUCE';
+        return p > c ? 'ADV YOU' : 'ADV CPU';
+      }
+      const n = ['0', '15', '30', '40'];
+      return n[Math.min(p, 3)] + '-' + n[Math.min(c, 3)];
+    }
+
+    function updateHud() {
+      gamesEl.textContent = games.player + '-' + games.cpu;
+      pointsEl.textContent = pointsDisplay();
+      servingEl.textContent = server === 'player' ? 'YOU' : 'CPU';
+    }
+
+    function checkSetWin() {
+      const a = games.player, b = games.cpu;
+      if ((a >= 6 && a - b >= 2) || a === 7) return 'player';
+      if ((b >= 6 && b - a >= 2) || b === 7) return 'cpu';
+      return null;
+    }
+
+    function positionBallForServe() {
+      const srv = server === 'player' ? player : cpu;
+      ball.x = srv.x;
+      ball.y = server === 'player' ? srv.y - 15 : srv.y + 15;
+      ball.z = 45;
+      ball.vx = 0; ball.vy = 0; ball.vz = 0;
+    }
+
+    function beginServeState() {
+      state = 'serving';
+      positionBallForServe();
+      msgEl.textContent = server === 'player' ? 'YOUR SERVE — press SPACE' : "CPU serving...";
+      if (server === 'cpu') cpuServeTimer = 700 + Math.random() * 500;
+    }
+
+    function startServe() {
+      serveAttempt = 1;
+      servePending = false;
+      beginServeState();
+    }
+
+    function newMatch() {
+      games = { player: 0, cpu: 0 };
+      points = { player: 0, cpu: 0 };
+      server = 'player';
+      player.x = courtCX; player.y = courtBottom - 30;
+      cpu.x = courtCX; cpu.y = courtTop + 55;
+      updateHud();
+      state = 'point-pause';
+      msgEl.textContent = 'GET READY!';
+      setTimeout(startServe, 1200);
+    }
+
+    function shotTarget(hitterSide, xBias, depth) {
+      const halfW = (courtRight - courtLeft) / 2 - 25;
+      const tx = clamp(courtCX + xBias * halfW * (0.55 + Math.random() * 0.35), courtLeft + 15, courtRight - 15);
+      let ty;
+      if (hitterSide === 'player') {
+        if (depth === 'short') ty = netY - 35 - Math.random() * 20;
+        else if (depth === 'deep') ty = courtTop + 20 + Math.random() * 15;
+        else ty = courtTop + 55 + Math.random() * 70;
+      } else {
+        if (depth === 'short') ty = netY + 35 + Math.random() * 20;
+        else if (depth === 'deep') ty = courtBottom - 20 - Math.random() * 15;
+        else ty = courtBottom - 55 - Math.random() * 70;
+      }
+      return { x: tx, y: ty };
+    }
+
+    function applyShot(target, T, z0) {
+      ball.vx = (target.x - ball.x) / T;
+      ball.vy = (target.y - ball.y) / T;
+      ball.vz = (0.5 * GRAVITY * T * T - z0) / T;
+    }
+
+    function playerChooseShot() {
+      let xBias;
+      if (keys['arrowleft'] || keys['a']) xBias = -1;
+      else if (keys['arrowright'] || keys['d']) xBias = 1;
+      else xBias = clamp((courtCX - player.x) / ((courtRight - courtLeft) / 2), -0.6, 0.6);
+      let depth = 'normal';
+      if (keys['arrowup'] || keys['w']) depth = 'deep';
+      else if (keys['arrowdown'] || keys['s']) depth = 'short';
+      return shotTarget('player', xBias, depth);
+    }
+
+    function cpuChooseShot() {
+      const awayBias = player.x > courtCX ? -1 : 1;
+      const bias = Math.random() < 0.75
+        ? awayBias * (0.6 + Math.random() * 0.4)
+        : (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.5);
+      const roll = Math.random();
+      const depth = roll < 0.22 ? 'short' : (roll < 0.5 ? 'deep' : 'normal');
+      return shotTarget('cpu', bias, depth);
+    }
+
+    function serveTarget(side) {
+      const bias = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.4);
+      return shotTarget(side, bias, 'deep');
+    }
+
+    function rallyFlightTime(hitter) {
+      const dist = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+      const quality = clamp(1 - dist / REACH, 0, 1);
+      return 0.85 - quality * 0.3;
+    }
+
+    function doHit(side, isServe) {
+      const hitter = side === 'player' ? player : cpu;
+      if (side === lastHitter && state === 'rally') return;
+      if (!isServe) {
+        const dist = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+        if (dist > REACH || ball.z > MAX_REACH_Z) return;
+      }
+      if (servePending && side !== server) servePending = false;
+      if (isServe) servePending = true;
+      bounceCount = 0;
+      lastHitter = side;
+      const target = isServe ? serveTarget(side) : (side === 'player' ? playerChooseShot() : cpuChooseShot());
+      const T = isServe ? 0.85 : rallyFlightTime(hitter);
+      applyShot(target, T, ball.z);
+      state = 'rally';
+    }
+
+    function handleFault(hitterSide, cause) {
+      if (servePending && hitterSide === server) {
+        if (serveAttempt === 1) {
+          serveAttempt = 2;
+          msgEl.textContent = 'FAULT (' + cause + ') — 2nd serve';
+          state = 'point-pause';
+          setTimeout(beginServeState, 900);
+        } else {
+          msgEl.textContent = 'DOUBLE FAULT';
+          awardPoint(opponentOf(server));
+        }
+      } else {
+        awardPoint(opponentOf(hitterSide), cause);
+      }
+    }
+
+    function handleBounce(x, y) {
+      const inBounds = x >= courtLeft - 2 && x <= courtRight + 2 && y >= courtTop - 2 && y <= courtBottom + 2;
+      if (!inBounds) { handleFault(lastHitter, 'OUT'); return; }
+      if (servePending) servePending = false;
+      bounceCount++;
+      if (bounceCount >= 2) {
+        const sideAtFault = y < netY ? 'cpu' : 'player';
+        awardPoint(opponentOf(sideAtFault), 'MISS');
+      }
+    }
+
+    function awardPoint(winnerSide, reason) {
+      state = 'point-pause';
+      points[winnerSide]++;
+      updateHud();
+      const other = opponentOf(winnerSide);
+      const diff = points[winnerSide] - points[other];
+      const prefix = reason ? reason + ' — ' : '';
+      if (points[winnerSide] >= 4 && diff >= 2) {
+        msgEl.textContent = prefix + (winnerSide === 'player' ? 'YOU WIN THE GAME!' : 'CPU WINS THE GAME');
+        setTimeout(() => onGameWon(winnerSide), 1500);
+      } else {
+        msgEl.textContent = prefix + pointsDisplay();
+        setTimeout(startServe, 1100);
+      }
+    }
+
+    function onGameWon(winnerSide) {
+      games[winnerSide]++;
+      points = { player: 0, cpu: 0 };
+      updateHud();
+      const setWinner = checkSetWin();
+      if (setWinner) {
+        state = 'match-over';
+        msgEl.textContent = (setWinner === 'player' ? 'YOU WIN THE MATCH!' : 'CPU WINS THE MATCH') + ' — press R to play again';
+        return;
+      }
+      server = opponentOf(server);
+      updateHud();
+      setTimeout(startServe, 1000);
+    }
+
+    function updatePlayerMovement(dt) {
+      let dx = 0, dy = 0;
+      if (keys['arrowleft'] || keys['a']) dx -= 1;
+      if (keys['arrowright'] || keys['d']) dx += 1;
+      if (keys['arrowup'] || keys['w']) dy -= 1;
+      if (keys['arrowdown'] || keys['s']) dy += 1;
+      if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
+      player.x = clamp(player.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
+      player.y = clamp(player.y + dy * MOVE_SPEED * dt, netY + 15, courtBottom + 20);
+    }
+
+    function updateCPU(dt) {
+      const trackingBall = state === 'rally' && ball.y < netY;
+      const targetX = trackingBall ? clamp(ball.x, courtLeft + 15, courtRight - 15) : courtCX;
+      const dx = targetX - cpu.x;
+      const step = Math.sign(dx) * Math.min(Math.abs(dx), CPU_SPEED * dt);
+      cpu.x = clamp(cpu.x + step, courtLeft - 20, courtRight + 20);
+
+      const desiredY = trackingBall ? clamp(ball.y - 6, courtTop - 15, netY - 25) : courtTop + 55;
+      cpu.y = clamp(cpu.y + (desiredY - cpu.y) * Math.min(1, dt * 4), courtTop - 20, netY - 15);
+
+      if (state === 'rally' && lastHitter !== 'cpu') {
+        const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
+        if (dist <= REACH && ball.z <= MAX_REACH_Z && ball.y < netY) {
+          doHit('cpu', false);
+        }
+      }
+    }
+
+    function updateBallPhysics(dt) {
+      const prevY = ball.y;
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      ball.vz -= GRAVITY * dt;
+      ball.z += ball.vz * dt;
+
+      if ((prevY - netY) * (ball.y - netY) < 0 && ball.z < NET_HEIGHT) {
+        handleFault(lastHitter, 'NET');
+        return;
+      }
+
+      if (ball.z <= 0 && ball.vz < 0) {
+        ball.z = 0;
+        handleBounce(ball.x, ball.y);
+        if (state === 'rally') {
+          ball.vz = -ball.vz * 0.55;
+          if (Math.abs(ball.vz) < 60) ball.vz = 0;
+        }
+      }
+    }
+
+    function update(dt) {
+      if (state === 'match-over') return;
+      updatePlayerMovement(dt);
+      updateCPU(dt);
+      if (state === 'serving' && server === 'cpu') {
+        cpuServeTimer -= dt * 1000;
+        if (cpuServeTimer <= 0) doHit('cpu', true);
+      } else if (state === 'rally') {
+        updateBallPhysics(dt);
+      }
+    }
+
+    function drawCourt() {
+      ctx.fillStyle = '#0a4d2e';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#0e6b3f';
+      ctx.fillRect(courtLeft, courtTop, courtRight - courtLeft, courtBottom - courtTop);
+
+      ctx.strokeStyle = '#f4f4f4';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(courtLeft, courtTop, courtRight - courtLeft, courtBottom - courtTop);
+
+      const serviceOffset = 90;
+      ctx.beginPath();
+      ctx.moveTo(courtLeft, netY - serviceOffset); ctx.lineTo(courtRight, netY - serviceOffset);
+      ctx.moveTo(courtLeft, netY + serviceOffset); ctx.lineTo(courtRight, netY + serviceOffset);
+      ctx.moveTo(courtCX, netY - serviceOffset); ctx.lineTo(courtCX, netY + serviceOffset);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#2ee8ff';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.moveTo(courtLeft - 10, netY); ctx.lineTo(courtRight + 10, netY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function drawReachHint() {
+      const playerCanAct = state === 'rally' || (state === 'serving' && server === 'player');
+      if (!playerCanAct) return;
+      const dist = Math.hypot(ball.x - player.x, ball.y - player.y);
+      if (dist <= REACH && ball.z <= MAX_REACH_Z) {
+        ctx.strokeStyle = 'rgba(255,230,46,0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, REACH, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawEntity(e, color) {
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    function drawBall() {
+      const shadowScale = Math.max(0.3, 1 - ball.z / 220);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.beginPath();
+      ctx.ellipse(ball.x, ball.y, 7 * shadowScale, 3.5 * shadowScale, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const drawY = ball.y - ball.z * 0.6;
+      ctx.fillStyle = '#e8ff2e';
+      ctx.shadowColor = '#e8ff2e';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(ball.x, drawY, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    function draw() {
+      drawCourt();
+      drawReachHint();
+      drawEntity(cpu, '#ff2e88');
+      drawEntity(player, '#2ee8ff');
+      drawBall();
+    }
+
+    let lastTime = performance.now();
+    function loop(now) {
+      let dt = (now - lastTime) / 1000;
+      lastTime = now;
+      dt = Math.min(dt, 0.05);
+      if (!paused) update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+      keys[k] = true;
+      if (k === 'r') { newMatch(); return; }
+      if (k === 'p') {
+        if (state !== 'match-over') {
+          paused = !paused;
+          msgEl.textContent = paused ? 'PAUSED' : '';
+        }
+        return;
+      }
+      if (k === ' ') {
+        if (state === 'serving' && server === 'player') doHit('player', true);
+        else if (state === 'rally') doHit('player', false);
+      }
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+    updateHud();
+    newMatch();
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
