@@ -32,7 +32,12 @@ The tennis lobby needs a small WebSocket server (in `server/`), deployable on
 Render via `render.yaml`:
 
 1. Deploy the repo to Render (it picks up `render.yaml`) or run `cd server && npm install && npm start` locally.
-2. Copy the server's URL and set `NET_URL` near the top of the netplay block in `games/tennis.html` (e.g. `wss://your-app.onrender.com`, or `ws://localhost:3000` for local testing).
+2. Copy the server's URL and set `NET_URL` near the top of the netplay block in `tennis.html` (e.g. `wss://your-app.onrender.com`, or `ws://localhost:3000` for local testing).
 
 The match is host-authoritative: the player who accepts a challenge runs the
 simulation and streams state to the other, who sends back their inputs.
+
+The **website stays on GitHub Pages** (`maxvbuda.github.io/retro-arcade/`, with
+tennis at `/retro-arcade/tennis.html`). Render only hosts the multiplayer
+**API** (the WebSocket lobby server); the two are wired together purely by the
+`NET_URL` the page connects to.

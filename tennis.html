@@ -1,0 +1,1526 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tennis — Retro Arcade</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .hud span {
+      display: inline-block;
+      transition: color 0.15s ease;
+    }
+    .hud span.bump {
+      animation: score-bump 0.4s cubic-bezier(0.2, 1.6, 0.4, 1);
+      color: #fff;
+      text-shadow: 0 0 10px currentColor;
+    }
+    @keyframes score-bump {
+      0% { transform: scale(1); }
+      35% { transform: scale(1.9) translateY(-2px); }
+      100% { transform: scale(1); }
+    }
+    canvas { background: #06080f; }
+
+    /* ---- Lobby / matchmaking overlay ---- */
+    .lobby {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; padding: 20px;
+      background: rgba(6, 8, 15, 0.92);
+      font-family: 'Press Start 2P', monospace; color: #f4f4f4;
+      text-align: center;
+    }
+    .lobby.hidden { display: none; }
+    .lobby h2 { color: #2ee8ff; font-size: 15px; margin: 0 0 4px; text-shadow: 0 0 8px #2ee8ff; }
+    .lobby p { font-size: 9px; color: #9fb2c8; margin: 0; line-height: 1.7; }
+    .lobby input {
+      font-family: inherit; font-size: 11px; padding: 10px 12px; width: 220px; max-width: 80%;
+      background: #10131f; color: #fff; border: 2px solid #2ee8ff; border-radius: 6px; text-align: center;
+    }
+    .lobby button {
+      font-family: inherit; font-size: 10px; padding: 11px 16px; cursor: pointer;
+      background: #14141f; color: #ffe62e; border: 2px solid #ffe62e; border-radius: 6px;
+      box-shadow: 0 0 8px rgba(255, 230, 46, 0.35); transition: transform 0.1s, box-shadow 0.1s;
+    }
+    .lobby button:hover { transform: translateY(-2px); box-shadow: 0 0 14px rgba(255, 230, 46, 0.7); }
+    .lobby button.alt { color: #2ee8ff; border-color: #2ee8ff; box-shadow: 0 0 8px rgba(46, 232, 255, 0.35); }
+    .lobby .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    #playerList {
+      list-style: none; padding: 0; margin: 0; width: 300px; max-width: 90%;
+      max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+    }
+    #playerList li {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      background: #10131f; border: 2px solid #26314a; border-radius: 6px; padding: 8px 10px; font-size: 10px;
+    }
+    #playerList li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #playerList li button { font-size: 8px; padding: 7px 9px; }
+    #playerList li.busy { opacity: 0.45; }
+    #netStatus { font-size: 9px; color: #ff2e88; min-height: 12px; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">TENNIS</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>GAMES <span id="games">0-0</span></div>
+      <div>POINTS <span id="points">0-0</span></div>
+      <div>SERVING <span id="serving">YOU</span></div>
+    </div>
+    <div style="position: relative; width: 480px; max-width: 100%;">
+      <canvas id="game" width="480" height="620"></canvas>
+
+      <!-- Mode select -->
+      <div class="lobby" id="menuMode">
+        <h2>TENNIS</h2>
+        <p>Play the CPU, or take on a friend online.</p>
+        <div class="row">
+          <button id="btnSingle">SINGLE PLAYER</button>
+          <button class="alt" id="btnOnline">ONLINE</button>
+        </div>
+      </div>
+
+      <!-- Name entry -->
+      <div class="lobby hidden" id="menuName">
+        <h2>WHO ARE YOU?</h2>
+        <input id="nameInput" maxlength="16" placeholder="ENTER YOUR NAME" autocomplete="off" />
+        <div class="row">
+          <button id="btnJoin">JOIN LOBBY</button>
+          <button class="alt" id="btnNameBack">BACK</button>
+        </div>
+        <p id="netStatus"></p>
+      </div>
+
+      <!-- Lobby list -->
+      <div class="lobby hidden" id="menuLobby">
+        <h2>CHOOSE WHO TO FIGHT</h2>
+        <ul id="playerList"></ul>
+        <p id="lobbyHint">Waiting for other players to join…</p>
+        <div class="row"><button class="alt" id="btnLobbyBack">LEAVE LOBBY</button></div>
+      </div>
+
+      <!-- Incoming challenge -->
+      <div class="lobby hidden" id="menuChallenge">
+        <h2 id="challengeText">wants to fight!</h2>
+        <div class="row">
+          <button id="btnAccept">ACCEPT</button>
+          <button class="alt" id="btnDecline">DECLINE</button>
+        </div>
+      </div>
+    </div>
+    <div class="overlay-msg" id="msg">GET READY!</div>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; TIMING aims your shot — swing EARLY = ball goes right, LATE = goes left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
+  </div>
+
+  <script>
+  (function () {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const gamesEl = document.getElementById('games');
+    const pointsEl = document.getElementById('points');
+    const servingEl = document.getElementById('serving');
+    const msgEl = document.getElementById('msg');
+
+    const courtLeft = 60, courtRight = 360, courtTop = 50, courtBottom = 470;
+    const netY = (courtTop + courtBottom) / 2;
+    const courtCX = (courtLeft + courtRight) / 2;
+
+    const REACH = 42, MAX_REACH_Z = 90;
+    const GRAVITY = 560, NET_HEIGHT = 24; // lower g = flatter arc that hugs the court
+    const MOVE_SPEED = 190, CPU_SPEED = 170;
+    // CPU imperfection: it reacts a beat late to each incoming shot, and now
+    // and then commits an unforced error (misreads the ball and mispositions).
+    const CPU_REACT_BASE = 0.14, CPU_REACT_JITTER = 0.12, CPU_ERR_CHANCE = 0.15;
+
+    let keys = {};
+    let paused = false;
+    let state = 'point-pause'; // 'serving' | 'rally' | 'point-pause' | 'match-over'
+    let server = 'player';
+
+    // Networking: 'local' plays the CPU, 'host' runs the authoritative sim for
+    // an online match, 'guest' renders snapshots and sends its inputs.
+    let netMode = 'local';
+    let flipView = false;           // guest sees the court flipped so they're at the bottom
+    let guestInput = { dx: 0, dy: 0 };
+    let remoteSwing = false, remoteServe = false;
+    let snapAccum = 0, guestSendAccum = 0;
+    let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
+    let bounceCount = 0, lastHitter = null;
+    let games = { player: 0, cpu: 0 };
+    let points = { player: 0, cpu: 0 };
+
+    const player = { x: courtCX, y: courtBottom - 30, swing: 0 };
+    const cpu = { x: courtCX, y: courtTop + 55, swing: 0, reactTimer: 0, willError: false, errOffset: 0 };
+    const ball = { x: courtCX, y: courtBottom - 45, z: 45, vx: 0, vy: 0, vz: 0, shot: 'normal' };
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function opponentOf(side) { return side === 'player' ? 'cpu' : 'player'; }
+
+    // ---- Perspective projection -------------------------------------------
+    // Gameplay stays in flat "world" coords (x: courtLeft..courtRight,
+    // y: courtTop..courtBottom = far..near, z: height). Rendering projects
+    // those onto a receding trapezoidal court so it reads as 3D.
+    const courtHalfW = (courtRight - courtLeft) / 2;
+    const VIEW_CX = canvas.width / 2;
+    const FAR_ROW = 160, NEAR_ROW = 580;
+    const FAR_HALF = 115, NEAR_HALF = 215;
+    const HEIGHT_K = 0.72;
+    const TAU = Math.PI * 2;
+
+    const PLAYER_COLORS = { body: '#1f8fff', bodyDark: '#0a4fb5', trim: '#2ee8ff', skin: '#f3c9a0' };
+    const CPU_COLORS = { body: '#ff3b6b', bodyDark: '#b81048', trim: '#ff8adf', skin: '#e8b48c' };
+
+    function project(wx, wy, wz) {
+      if (flipView) { wx = courtLeft + courtRight - wx; wy = courtTop + courtBottom - wy; }
+      const t = (wy - courtTop) / (courtBottom - courtTop);
+      const tv = t <= 0 ? t : Math.pow(t, 1.15);
+      const half = FAR_HALF + (NEAR_HALF - FAR_HALF) * t;
+      const scale = half / courtHalfW;
+      return {
+        x: VIEW_CX + (wx - courtCX) * scale,
+        y: (FAR_ROW + (NEAR_ROW - FAR_ROW) * tv) - (wz || 0) * scale * HEIGHT_K,
+        scale,
+      };
+    }
+    function P(wx, wy) { return project(wx, wy, 0); }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+    function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+    // ---- Visual systems: lighting, textures, juice ------------------------
+    const LIGHT = { x: -0.55, y: -0.83 }; // unit vector pointing toward the key light
+
+    function makeNoise(size) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      const img = g.createImageData(size, size);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.random() * 255;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+        img.data[i + 3] = 255;
+      }
+      g.putImageData(img, 0, 0);
+      return c;
+    }
+    const noiseTex = makeNoise(120);
+    const grainTex = makeNoise(150);
+    const noisePattern = ctx.createPattern(noiseTex, 'repeat');
+
+    let shake = 0, freezeTimer = 0, crowdFlash = 0, screenFlash = 0, ballSpin = 0;
+    let decals = [];
+
+    function kick(mag, freeze) {
+      shake = Math.max(shake, mag);
+      if (freeze) freezeTimer = Math.max(freezeTimer, freeze);
+    }
+
+    function addDecal(wx, wy) {
+      decals.push({ x: wx, y: wy, r: 5 + Math.random() * 3, life: 5, max: 5, rot: Math.random() * Math.PI });
+      if (decals.length > 40) decals.shift();
+    }
+
+    // Soft, distance-scaled contact shadow cast by the single key light.
+    function groundShadow(px, py, radius, heightPx, alpha) {
+      const off = heightPx * 0.55;
+      const sx = px - LIGHT.x * off; // light is upper-left, so shadows fall lower-right
+      const sy = py - LIGHT.y * off;
+      const blur = radius * (1 + heightPx / 150);
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.scale(1, 0.42);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, blur);
+      g.addColorStop(0, `rgba(4,10,26,${alpha})`);
+      g.addColorStop(1, 'rgba(4,10,26,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, blur, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Sound (Web Audio, synthesized on the fly — no files) -------------
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let actx = null, muted = false;
+    function audio() {
+      if (muted || !AudioCtx) return null;
+      if (!actx) actx = new AudioCtx();
+      return actx;
+    }
+    function unlockAudio() {
+      if (!AudioCtx) return;
+      if (!actx) actx = new AudioCtx();
+      if (actx.state === 'suspended') actx.resume();
+    }
+    function tone(freq, dur, type, vol, slideTo) {
+      const a = audio(); if (!a) return;
+      const t = a.currentTime;
+      const osc = a.createOscillator(), g = a.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(g); g.connect(a.destination);
+      osc.start(t); osc.stop(t + dur + 0.02);
+    }
+    function noiseBurst(dur, vol, freq) {
+      const a = audio(); if (!a) return;
+      const t = a.currentTime;
+      const n = Math.max(1, Math.floor(a.sampleRate * dur));
+      const buf = a.createBuffer(1, n, a.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const filt = a.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = freq; filt.Q.value = 1.2;
+      const g = a.createGain(); g.gain.value = vol;
+      src.connect(filt); filt.connect(g); g.connect(a.destination);
+      src.start(t);
+    }
+    function sHit(shot) {
+      if (shot === 'slam') { noiseBurst(0.06, 0.6, 520); tone(170, 0.13, 'square', 0.28, 60); }
+      else if (shot === 'lob') { noiseBurst(0.04, 0.28, 950); tone(520, 0.10, 'sine', 0.13, 380); }
+      else { noiseBurst(0.045, 0.4, 720); tone(300, 0.08, 'triangle', 0.18, 150); }
+    }
+    function sBounce() { noiseBurst(0.05, 0.22, 320); tone(130, 0.09, 'sine', 0.12, 70); }
+    function sNet() { noiseBurst(0.09, 0.3, 200); }
+    function sPoint(win) {
+      if (win) {
+        tone(523, 0.11, 'square', 0.2);
+        setTimeout(() => tone(659, 0.11, 'square', 0.2), 90);
+        setTimeout(() => tone(784, 0.16, 'square', 0.2), 180);
+      } else {
+        tone(220, 0.28, 'sawtooth', 0.18, 120);
+      }
+    }
+    // Host relays one-shot sound events so the guest hears them too.
+    function relaySfx(n, extra) {
+      if (netMode === 'host') netSend({ t: 'msg', data: Object.assign({ k: 'sfx', n }, extra || {}) });
+    }
+
+    // ---- Effects (swing, ball trail, particles) ---------------------------
+    let particles = [];
+    let ballTrail = [];
+    let floatTexts = [];
+
+    function triggerSwing(p) { p.swing = 1; }
+
+    function addFloatText(wx, wy, txt, color) {
+      const pr = project(wx, wy, 30);
+      floatTexts.push({ x: pr.x, y: pr.y, txt, color, life: 0.8, max: 0.8 });
+    }
+
+    function spawnHit(hitter, color) {
+      const pr = project(hitter.x, hitter.y, 22);
+      for (let i = 0; i < 10; i++) {
+        const a = Math.random() * TAU, sp = 40 + Math.random() * 120;
+        particles.push({
+          x: pr.x, y: pr.y,
+          vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40,
+          life: 0.35 + Math.random() * 0.2, max: 0.55,
+          size: (1.5 + Math.random() * 2) * pr.scale,
+          color: Math.random() < 0.5 ? color : '#ffffff',
+        });
+      }
+    }
+
+    function spawnPuff(wx, wy) {
+      const pr = P(wx, wy);
+      for (let i = 0; i < 7; i++) {
+        const a = -Math.PI + Math.random() * Math.PI;
+        const sp = 20 + Math.random() * 70;
+        particles.push({
+          x: pr.x, y: pr.y,
+          vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.5,
+          life: 0.3 + Math.random() * 0.15, max: 0.45,
+          size: (2 + Math.random() * 2) * pr.scale,
+          color: 'rgba(230,255,180,1)',
+        });
+      }
+    }
+
+    function updateFx(dt) {
+      if (player.swing > 0) player.swing = Math.max(0, player.swing - dt / 0.26);
+      if (cpu.swing > 0) cpu.swing = Math.max(0, cpu.swing - dt / 0.26);
+
+      for (const pt of particles) {
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        pt.vy += 260 * dt;
+        pt.life -= dt;
+      }
+      particles = particles.filter(pt => pt.life > 0);
+
+      for (const tr of ballTrail) tr.life -= dt;
+      ballTrail = ballTrail.filter(tr => tr.life > 0);
+      if (state === 'rally') {
+        const pr = project(ball.x, ball.y, ball.z);
+        const spd = Math.hypot(ball.vx, ball.vy);
+        // faster ball -> longer-lived, longer trail
+        ballTrail.push({ x: pr.x, y: pr.y, r: 6 * pr.scale, life: 0.16 + Math.min(0.22, spd / 1700) });
+        const cap = 10 + Math.floor(Math.min(20, spd / 38));
+        while (ballTrail.length > cap) ballTrail.shift();
+        ballSpin += (spd + Math.abs(ball.vz)) * dt * 0.02;
+      }
+
+      for (const ft of floatTexts) { ft.y -= 26 * dt; ft.life -= dt; }
+      floatTexts = floatTexts.filter(ft => ft.life > 0);
+
+      for (const d of decals) d.life -= dt;
+      decals = decals.filter(d => d.life > 0);
+      if (crowdFlash > 0) crowdFlash = Math.max(0, crowdFlash - dt / 0.55);
+      if (screenFlash > 0) screenFlash = Math.max(0, screenFlash - dt / 0.4);
+    }
+
+    function pointsStr(p, c) {
+      if (p >= 3 && c >= 3) {
+        if (p === c) return 'DEUCE';
+        return p > c ? 'ADV YOU' : 'ADV OPP';
+      }
+      const n = ['0', '15', '30', '40'];
+      return n[Math.min(p, 3)] + '-' + n[Math.min(c, 3)];
+    }
+    function pointsDisplay() { return pointsStr(points.player, points.cpu); }
+
+    function setHud(el, value) {
+      if (el.textContent === String(value)) return;
+      el.textContent = value;
+      el.classList.remove('bump');
+      void el.offsetWidth; // restart the CSS animation
+      el.classList.add('bump');
+    }
+
+    function updateHud() {
+      if (netMode === 'guest') {
+        // guest is the far ('cpu') player — show the score from their side
+        setHud(gamesEl, games.cpu + '-' + games.player);
+        setHud(pointsEl, pointsStr(points.cpu, points.player));
+        setHud(servingEl, server === 'cpu' ? 'YOU' : 'OPP');
+        return;
+      }
+      setHud(gamesEl, games.player + '-' + games.cpu);
+      setHud(pointsEl, pointsDisplay());
+      setHud(servingEl, server === 'player' ? 'YOU' : (netMode === 'local' ? 'CPU' : 'OPP'));
+    }
+
+    function checkSetWin() {
+      // Short set: first to 4 games (win by 2), decider at 4-4 -> first to 5.
+      const a = games.player, b = games.cpu;
+      if ((a >= 4 && a - b >= 2) || a === 5) return 'player';
+      if ((b >= 4 && b - a >= 2) || b === 5) return 'cpu';
+      return null;
+    }
+
+    function positionBallForServe() {
+      const srv = server === 'player' ? player : cpu;
+      ball.x = srv.x;
+      ball.y = server === 'player' ? srv.y - 15 : srv.y + 15;
+      ball.z = 45;
+      ball.vx = 0; ball.vy = 0; ball.vz = 0;
+    }
+
+    function beginServeState() {
+      state = 'serving';
+      positionBallForServe();
+      msgEl.textContent = server === 'player' ? 'YOUR SERVE — press SPACE' : "CPU serving...";
+      if (server === 'cpu') cpuServeTimer = 700 + Math.random() * 500;
+    }
+
+    function startServe() {
+      serveAttempt = 1;
+      servePending = false;
+      beginServeState();
+    }
+
+    function newMatch() {
+      games = { player: 0, cpu: 0 };
+      points = { player: 0, cpu: 0 };
+      server = 'player';
+      player.x = courtCX; player.y = courtBottom - 30;
+      cpu.x = courtCX; cpu.y = courtTop + 55;
+      updateHud();
+      state = 'point-pause';
+      msgEl.textContent = 'GET READY!';
+      setTimeout(startServe, 1200);
+    }
+
+    function shotTarget(hitterSide, xBias, depth) {
+      const halfW = (courtRight - courtLeft) / 2 - 25;
+      const tx = clamp(courtCX + xBias * halfW * (0.55 + Math.random() * 0.35), courtLeft + 15, courtRight - 15);
+      let ty;
+      if (hitterSide === 'player') {
+        if (depth === 'short') ty = netY - 35 - Math.random() * 20;
+        else if (depth === 'deep') ty = courtTop + 20 + Math.random() * 15;
+        else ty = courtTop + 55 + Math.random() * 70;
+      } else {
+        if (depth === 'short') ty = netY + 35 + Math.random() * 20;
+        else if (depth === 'deep') ty = courtBottom - 20 - Math.random() * 15;
+        else ty = courtBottom - 55 - Math.random() * 70;
+      }
+      return { x: tx, y: ty };
+    }
+
+    function applyShot(target, T, z0) {
+      ball.vx = (target.x - ball.x) / T;
+      ball.vy = (target.y - ball.y) / T;
+      ball.vz = (0.5 * GRAVITY * T * T - z0) / T;
+    }
+
+    function playerChooseShot() {
+      // Horizontal aim comes from swing TIMING, not from keys:
+      //   ball still out in front (you swung EARLY) -> shot goes right
+      //   ball dropping behind you (you swung LATE)  -> shot goes left
+      //   contact right on the sweet spot           -> straight ahead
+      // The near player faces up the court, so a bigger (ball.y - player.y)
+      // means the ball has travelled past you = a later swing.
+      const timingErr = clamp((ball.y - player.y) / REACH, -1.2, 1.2);
+      const xBias = clamp(-timingErr * 1.3, -1, 1);
+
+      let depth = 'normal';
+      if (keys['arrowup'] || keys['w']) depth = 'deep';
+      else if (keys['arrowdown'] || keys['s']) depth = 'short';
+
+      const ae = Math.abs(timingErr);
+      if (ae < 0.35) addFloatText(player.x, player.y, 'NICE', '#2eff88');
+      else if (timingErr < 0) addFloatText(player.x, player.y, 'EARLY', '#ffe62e');
+      else addFloatText(player.x, player.y, 'LATE', '#ff8a2e');
+
+      return shotTarget('player', xBias, depth);
+    }
+
+    function cpuChooseShot() {
+      const awayBias = player.x > courtCX ? -1 : 1;
+      const bias = Math.random() < 0.75
+        ? awayBias * (0.6 + Math.random() * 0.4)
+        : (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.5);
+      const roll = Math.random();
+      const depth = roll < 0.22 ? 'short' : (roll < 0.5 ? 'deep' : 'normal');
+      return shotTarget('cpu', bias, depth);
+    }
+
+    // Timing-based aim for a human-controlled far player (online guest). The
+    // guest's view is flipped, so the signs mirror playerChooseShot to keep
+    // "swing early = your right" true on their screen.
+    function farChooseShot() {
+      const timingErr = clamp((cpu.y - ball.y) / REACH, -1.2, 1.2);
+      const xBias = clamp(timingErr * 1.3, -1, 1);
+      let depth = 'normal';
+      if (guestInput.dy < -0.3) depth = 'deep';
+      else if (guestInput.dy > 0.3) depth = 'short';
+      return shotTarget('cpu', xBias, depth);
+    }
+
+    function serveTarget(side) {
+      const bias = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.4);
+      return shotTarget(side, bias, 'deep');
+    }
+
+    function rallyFlightTime(hitter) {
+      // Flight time = how long the ball takes to cross the court, so bigger is
+      // slower. A clean strike (high quality) is a bit quicker than a stretch.
+      const dist = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+      const quality = clamp(1 - dist / REACH, 0, 1);
+      return 1.2 - quality * 0.35;
+    }
+
+    function doHit(side, isServe) {
+      const hitter = side === 'player' ? player : cpu;
+      if (side === lastHitter && state === 'rally') return;
+      if (!isServe) {
+        const dist = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+        if (dist > REACH || ball.z > MAX_REACH_Z) return;
+      }
+      if (servePending && side !== server) servePending = false;
+      if (isServe) servePending = true;
+      bounceCount = 0;
+      lastHitter = side;
+      const target = isServe ? serveTarget(side)
+        : (side === 'player' ? playerChooseShot()
+          : (netMode === 'host' ? farChooseShot() : cpuChooseShot()));
+
+      // Classify the shot. You can only SLAM an incoming lob (the floaty
+      // purple ball) with a clean strike — a fast, steep, hard-to-return bolt.
+      // A stretched, barely-reached ball floats up as a weak LOB.
+      const incomingShot = ball.shot;
+      let T, shot;
+      if (isServe) {
+        T = 1.05; shot = 'normal';
+      } else {
+        const d = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+        const quality = clamp(1 - d / REACH, 0, 1);
+        // Slam only an overhead: incoming lob, clean contact, AND ball still
+        // high — a high strike angles down over the net instead of into it.
+        if (incomingShot === 'lob' && quality > 0.35 && ball.z > 50) { shot = 'slam'; T = 0.42; }
+        else if (quality < 0.1) { shot = 'lob'; T = 1.5; } // only genuine stretches
+        else { shot = 'normal'; T = rallyFlightTime(hitter); }
+      }
+      ball.shot = shot;
+      sHit(shot);
+      relaySfx('hit', { shot });
+
+      // Snap the ball onto the racket's contact point so it visibly meets the
+      // racket instead of drifting past the player. Contact height matches the
+      // stroke: an overhead slam is struck up high, a lob down low.
+      const contactZ = shot === 'slam' ? 58 : (shot === 'lob' ? 16 : 30);
+      ball.x = hitter.x;
+      ball.y = hitter.y + (side === 'player' ? -14 : 14);
+      ball.z = contactZ;
+
+      if (shot === 'slam') {
+        // drive it deep into the open court so it clears the net and lands hard
+        target.y = side === 'player' ? courtTop + 22 + Math.random() * 22 : courtBottom - 22 - Math.random() * 22;
+        addFloatText(hitter.x, hitter.y, 'SLAM!', '#ff7a1a');
+      } else if (shot === 'lob') {
+        addFloatText(hitter.x, hitter.y, 'LOB', '#c46bff');
+      }
+      applyShot(target, T, ball.z);
+      triggerSwing(hitter);
+      spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
+      const spd = Math.hypot(ball.vx, ball.vy);
+      kick(clamp(spd / 150, 1.5, 5), side === 'player' ? 0.035 : 0);
+
+      // Arm the CPU's response to this incoming shot: a reaction delay always,
+      // and occasionally a full-blown unforced error (late + misread).
+      if (side === 'player') {
+        cpu.reactTimer = CPU_REACT_BASE + Math.random() * CPU_REACT_JITTER;
+        cpu.willError = Math.random() < CPU_ERR_CHANCE;
+        if (cpu.willError) {
+          cpu.reactTimer += 0.22 + Math.random() * 0.18;
+          cpu.errOffset = (Math.random() < 0.5 ? -1 : 1) * (32 + Math.random() * 42);
+        } else {
+          cpu.errOffset = 0;
+        }
+        // a slam is fast and hard to read — the CPU reacts even later to it,
+        // so a well-placed slam is usually a winner.
+        if (shot === 'slam') cpu.reactTimer += 0.2 + Math.random() * 0.14;
+      }
+      state = 'rally';
+    }
+
+    function handleFault(hitterSide, cause) {
+      if (cause === 'NET') { sNet(); relaySfx('net'); }
+      if (servePending && hitterSide === server) {
+        if (serveAttempt === 1) {
+          serveAttempt = 2;
+          msgEl.textContent = 'FAULT (' + cause + ') — 2nd serve';
+          state = 'point-pause';
+          setTimeout(beginServeState, 900);
+        } else {
+          msgEl.textContent = 'DOUBLE FAULT';
+          awardPoint(opponentOf(server));
+        }
+      } else {
+        awardPoint(opponentOf(hitterSide), cause);
+      }
+    }
+
+    function handleBounce(x, y) {
+      // A ball can only be called OUT on its FIRST bounce. Once it has landed
+      // in-bounds, a second bounce just means the receiver failed to return it,
+      // so the point goes to whoever hit it last — it is never called out.
+      if (bounceCount === 0) {
+        const inBounds = x >= courtLeft - 2 && x <= courtRight + 2 &&
+                         y >= courtTop - 2 && y <= courtBottom + 2;
+        if (!inBounds) { handleFault(lastHitter, 'OUT'); return; }
+        if (servePending) servePending = false;
+        bounceCount = 1;
+        return;
+      }
+      bounceCount++;
+      awardPoint(lastHitter, 'WINNER');
+    }
+
+    function awardPoint(winnerSide, reason) {
+      state = 'point-pause';
+      points[winnerSide]++;
+      updateHud();
+      if (winnerSide === 'player') { crowdFlash = 1; screenFlash = 0.6; kick(4, 0); }
+      else crowdFlash = 0.4;
+      sPoint(winnerSide === 'player');
+      relaySfx('point', { win: winnerSide === 'player' });
+      const other = opponentOf(winnerSide);
+      const diff = points[winnerSide] - points[other];
+      const prefix = reason ? reason + ' — ' : '';
+      if (points[winnerSide] >= 4 && diff >= 2) {
+        msgEl.textContent = prefix + (winnerSide === 'player' ? 'YOU WIN THE GAME!' : 'CPU WINS THE GAME');
+        setTimeout(() => onGameWon(winnerSide), 1500);
+      } else {
+        msgEl.textContent = prefix + pointsDisplay();
+        setTimeout(startServe, 1100);
+      }
+    }
+
+    function onGameWon(winnerSide) {
+      games[winnerSide]++;
+      points = { player: 0, cpu: 0 };
+      updateHud();
+      const setWinner = checkSetWin();
+      if (setWinner) {
+        state = 'match-over';
+        msgEl.textContent = (setWinner === 'player' ? 'YOU WIN THE MATCH!' : 'CPU WINS THE MATCH') + ' — press R to play again';
+        return;
+      }
+      server = opponentOf(server);
+      updateHud();
+      setTimeout(startServe, 1000);
+    }
+
+    function updatePlayerMovement(dt) {
+      let dx = 0, dy = 0;
+      if (keys['arrowleft'] || keys['a']) dx -= 1;
+      if (keys['arrowright'] || keys['d']) dx += 1;
+      if (keys['arrowup'] || keys['w']) dy -= 1;
+      if (keys['arrowdown'] || keys['s']) dy += 1;
+      if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
+      player.x = clamp(player.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
+      player.y = clamp(player.y + dy * MOVE_SPEED * dt, netY + 15, courtBottom + 20);
+      player.lean = (player.lean || 0) + (dx - (player.lean || 0)) * Math.min(1, dt * 8);
+    }
+
+    // Online host: the far player is a human guest. Move it from their input
+    // (their view is flipped 180°, so negate both axes) and swing on demand.
+    function updateRemotePlayer(dt) {
+      let dx = -guestInput.dx, dy = -guestInput.dy;
+      if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
+      cpu.x = clamp(cpu.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
+      cpu.y = clamp(cpu.y + dy * MOVE_SPEED * dt, courtTop - 20, netY - 15);
+      const leanTarget = Math.abs(dx) > 0.05 ? Math.sign(dx) : 0;
+      cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
+
+      if (state === 'rally' && lastHitter !== 'cpu' && remoteSwing) {
+        const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
+        if (dist <= REACH && ball.z <= MAX_REACH_Z) doHit('cpu', false);
+      }
+      remoteSwing = false;
+    }
+
+    function updateCPU(dt) {
+      if (netMode === 'host') { updateRemotePlayer(dt); return; }
+      if (cpu.reactTimer > 0) cpu.reactTimer -= dt;
+      const reacting = cpu.reactTimer <= 0;
+      const incoming = state === 'rally' && ball.y < netY && lastHitter !== 'cpu';
+
+      // Until the reaction timer elapses the CPU is caught flat-footed and
+      // holds its ground, so quick/wide shots can get past it. On an unforced-
+      // error shot it also misreads the ball, chasing the wrong spot.
+      const chase = incoming && reacting;
+      const aimX = chase
+        ? clamp(ball.x + (cpu.willError ? cpu.errOffset : 0), courtLeft + 15, courtRight - 15)
+        : (incoming ? cpu.x : courtCX);
+      const dx = aimX - cpu.x;
+      const step = Math.sign(dx) * Math.min(Math.abs(dx), CPU_SPEED * dt);
+      cpu.x = clamp(cpu.x + step, courtLeft - 20, courtRight + 20);
+      const leanTarget = Math.abs(dx) > 2 ? Math.sign(dx) : 0;
+      cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
+
+      const desiredY = chase ? clamp(ball.y - 6, courtTop - 15, netY - 25) : courtTop + 55;
+      cpu.y = clamp(cpu.y + (desiredY - cpu.y) * Math.min(1, dt * 4), courtTop - 20, netY - 15);
+
+      if (incoming) {
+        const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
+        if (dist <= REACH && ball.z <= MAX_REACH_Z) {
+          doHit('cpu', false);
+        }
+      }
+    }
+
+    function updateBallPhysics(dt) {
+      const prevY = ball.y;
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      ball.vz -= GRAVITY * dt;
+      ball.z += ball.vz * dt;
+
+      if ((prevY - netY) * (ball.y - netY) < 0 && ball.z < NET_HEIGHT) {
+        handleFault(lastHitter, 'NET');
+        return;
+      }
+
+      if (ball.z <= 0 && ball.vz < 0) {
+        ball.z = 0;
+        spawnPuff(ball.x, ball.y);
+        addDecal(ball.x, ball.y);
+        kick(Math.min(2.2, Math.abs(ball.vz) / 260), 0);
+        sBounce();
+        relaySfx('bounce');
+        handleBounce(ball.x, ball.y);
+        if (state === 'rally') {
+          ball.vz = -ball.vz * 0.55;
+          if (Math.abs(ball.vz) < 60) ball.vz = 0;
+        }
+      }
+    }
+
+    function update(dt) {
+      if (state === 'match-over') return;
+      updatePlayerMovement(dt);
+      updateCPU(dt);
+      if (state === 'serving' && server === 'cpu') {
+        if (netMode === 'host') {
+          if (remoteServe) { remoteServe = false; doHit('cpu', true); }
+        } else {
+          cpuServeTimer -= dt * 1000;
+          if (cpuServeTimer <= 0) doHit('cpu', true);
+        }
+      } else if (state === 'rally') {
+        updateBallPhysics(dt);
+      }
+    }
+
+    function floodlight(baseX) {
+      // a tower with a lamp array up top and a soft volumetric cone onto the court
+      const topY = 8, poleTopY = 40;
+      ctx.strokeStyle = '#141a30'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(baseX, poleTopY + 60); ctx.lineTo(baseX, poleTopY); ctx.stroke();
+
+      // lamp housing
+      ctx.fillStyle = '#20263f';
+      ctx.fillRect(baseX - 20, topY, 40, 20);
+      const flick = 0.82 + 0.18 * Math.sin(Date.now() / 90 + baseX);
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = `rgba(255,250,220,${flick})`;
+        ctx.shadowColor = '#fff7d0'; ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(baseX - 15 + (i % 3) * 15, topY + 6 + Math.floor(i / 3) * 8, 2.4, 0, TAU);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // volumetric cone toward court center
+      const aim = P(courtCX, netY);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const cone = ctx.createLinearGradient(baseX, topY + 10, aim.x, aim.y);
+      cone.addColorStop(0, `rgba(255,248,214,${0.10 * flick})`);
+      cone.addColorStop(1, 'rgba(255,248,214,0)');
+      ctx.fillStyle = cone;
+      ctx.beginPath();
+      ctx.moveTo(baseX, topY + 10);
+      ctx.lineTo(aim.x - 150, aim.y);
+      ctx.lineTo(aim.x + 150, aim.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawBackground() {
+      // dusk sky (overscanned so screen-shake never reveals an edge)
+      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      g.addColorStop(0, '#0a0d28');
+      g.addColorStop(0.35, '#241a48');
+      g.addColorStop(0.62, '#5a2f5e');
+      g.addColorStop(0.72, '#b8563f');
+      g.addColorStop(0.85, '#1a1636');
+      ctx.fillStyle = g;
+      ctx.fillRect(-12, -12, canvas.width + 24, canvas.height + 24);
+
+      floodlight(46);
+      floodlight(canvas.width - 46);
+
+      // stadium bowl behind the far baseline
+      const fl = P(courtLeft - 60, courtTop);
+      const fr = P(courtRight + 60, courtTop);
+      ctx.fillStyle = '#0d1338';
+      ctx.beginPath();
+      ctx.moveTo(-12, 58); ctx.lineTo(canvas.width + 12, 58);
+      ctx.lineTo(fr.x, fr.y); ctx.lineTo(fl.x, fl.y);
+      ctx.closePath(); ctx.fill();
+
+      // shimmering crowd (with parallax rows + winner flash boost)
+      const now = Date.now();
+      const boost = crowdFlash * 35;
+      for (let r = 0; r < 6; r++) {
+        const yy = 62 + r * 13;
+        const inset = 10 + r * 4;
+        const cols = 40 - r * 2;
+        for (let c = 0; c < cols; c++) {
+          const xx = inset + c * ((canvas.width - inset * 2) / (cols - 1));
+          const tw = 0.5 + 0.5 * Math.sin(now / 400 + c * 1.7 + r);
+          const hue = (c * 37 + r * 90) % 360;
+          ctx.fillStyle = `hsla(${hue},60%,${40 + tw * 18 + boost}%,0.75)`;
+          ctx.beginPath();
+          ctx.arc(xx, yy, 2 - r * 0.12, 0, TAU);
+          ctx.fill();
+        }
+      }
+
+      // heat-shimmer band just above the far baseline
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 3; i++) {
+        const yy = fl.y - 6 - i * 4;
+        const a = 0.05 + 0.04 * Math.sin(now / 260 + i);
+        ctx.fillStyle = `rgba(180,200,255,${a})`;
+        ctx.fillRect(fl.x, yy + Math.sin(now / 300 + i) * 1.5, fr.x - fl.x, 3);
+      }
+      ctx.restore();
+    }
+
+    function drawCourtSurface() {
+      const fl = P(courtLeft, courtTop), fr = P(courtRight, courtTop);
+      const nl = P(courtLeft, courtBottom), nr = P(courtRight, courtBottom);
+
+      // run-off apron
+      const afl = P(courtLeft - 26, courtTop - 14), afr = P(courtRight + 26, courtTop - 14);
+      const anl = P(courtLeft - 26, courtBottom + 16), anr = P(courtRight + 26, courtBottom + 16);
+      ctx.fillStyle = '#123a86';
+      ctx.beginPath();
+      ctx.moveTo(afl.x, afl.y); ctx.lineTo(afr.x, afr.y);
+      ctx.lineTo(anr.x, anr.y); ctx.lineTo(anl.x, anl.y);
+      ctx.closePath(); ctx.fill();
+
+      // main surface
+      const g = ctx.createLinearGradient(0, fl.y, 0, nl.y);
+      g.addColorStop(0, '#1f6bd6');
+      g.addColorStop(1, '#2f86ff');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(fl.x, fl.y); ctx.lineTo(fr.x, fr.y);
+      ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
+      ctx.closePath(); ctx.fill();
+
+      // surface grain: subtle noise texture clipped to the court
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(fl.x, fl.y); ctx.lineTo(fr.x, fr.y);
+      ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
+      ctx.closePath(); ctx.clip();
+      ctx.globalAlpha = 0.06;
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.fillStyle = noisePattern;
+      ctx.fillRect(0, fl.y - 4, canvas.width, nl.y - fl.y + 8);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ambient occlusion darkening toward the net line
+      const ny = P(courtCX, netY).y;
+      const ao = ctx.createLinearGradient(0, ny - 60, 0, ny + 60);
+      ao.addColorStop(0, 'rgba(0,0,10,0)');
+      ao.addColorStop(0.5, 'rgba(0,0,10,0.20)');
+      ao.addColorStop(1, 'rgba(0,0,10,0)');
+      ctx.fillStyle = ao;
+      ctx.fillRect(0, ny - 60, canvas.width, 120);
+      ctx.restore();
+
+      // sheen
+      const sh = ctx.createLinearGradient(0, fl.y, 0, nl.y);
+      sh.addColorStop(0, 'rgba(255,255,255,0.10)');
+      sh.addColorStop(0.5, 'rgba(255,255,255,0.02)');
+      sh.addColorStop(1, 'rgba(255,255,255,0.08)');
+      ctx.fillStyle = sh;
+      ctx.beginPath();
+      ctx.moveTo(fl.x, fl.y); ctx.lineTo(fr.x, fr.y);
+      ctx.lineTo(nr.x, nr.y); ctx.lineTo(nl.x, nl.y);
+      ctx.closePath(); ctx.fill();
+
+      // lines (with a faint painted-wear alpha wobble)
+      ctx.lineJoin = 'round';
+      function line(x1, y1, x2, y2, w) {
+        const a = P(x1, y1), b = P(x2, y2);
+        const wear = 0.82 + 0.12 * Math.sin(x1 * 0.7 + y1 * 0.3);
+        ctx.strokeStyle = `rgba(240,244,255,${wear})`;
+        ctx.lineWidth = w;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      const so = 90;
+      line(courtLeft, courtTop, courtRight, courtTop, 2.2);
+      line(courtLeft, courtBottom, courtRight, courtBottom, 3.4);
+      line(courtLeft, courtTop, courtLeft, courtBottom, 2.6);
+      line(courtRight, courtTop, courtRight, courtBottom, 2.6);
+      line(courtLeft, netY - so, courtRight, netY - so, 2);
+      line(courtLeft, netY + so, courtRight, netY + so, 2.4);
+      line(courtCX, netY - so, courtCX, netY + so, 2);
+      line(courtCX, courtTop, courtCX, courtTop + 10, 2);
+      line(courtCX, courtBottom - 10, courtCX, courtBottom, 2.4);
+    }
+
+    function drawDecals() {
+      for (const d of decals) {
+        const pr = P(d.x, d.y);
+        const a = (d.life / d.max) * 0.3;
+        ctx.save();
+        ctx.translate(pr.x, pr.y);
+        ctx.scale(1, 0.5);
+        ctx.rotate(d.rot);
+        ctx.fillStyle = `rgba(18,34,74,${a})`;
+        ctx.beginPath(); ctx.ellipse(0, 0, d.r * pr.scale, d.r * pr.scale * 0.8, 0, 0, TAU); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawReachHint() {
+      const me = netMode === 'guest' ? cpu : player;
+      const mySide = netMode === 'guest' ? 'cpu' : 'player';
+      const canAct = state === 'rally' || (state === 'serving' && server === mySide);
+      if (!canAct) return;
+      const dist = Math.hypot(ball.x - me.x, ball.y - me.y);
+      const ready = dist <= REACH && ball.z <= MAX_REACH_Z;
+      const pr = P(me.x, me.y);
+      ctx.strokeStyle = ready ? 'rgba(255,230,46,0.85)' : 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(pr.x, pr.y, REACH * pr.scale, REACH * pr.scale * 0.42, 0, 0, TAU);
+      ctx.stroke();
+    }
+
+    function drawNet() {
+      const bl = P(courtLeft - 10, netY), br = P(courtRight + 10, netY);
+      const tl = project(courtLeft - 10, netY, NET_HEIGHT), tr = project(courtRight + 10, netY, NET_HEIGHT);
+
+      ctx.fillStyle = 'rgba(230,240,255,0.14)';
+      ctx.beginPath();
+      ctx.moveTo(bl.x, bl.y); ctx.lineTo(br.x, br.y);
+      ctx.lineTo(tr.x, tr.y); ctx.lineTo(tl.x, tl.y);
+      ctx.closePath(); ctx.fill();
+
+      ctx.strokeStyle = 'rgba(220,235,255,0.22)';
+      ctx.lineWidth = 1;
+      const strands = 34;
+      for (let i = 0; i <= strands; i++) {
+        const f = i / strands;
+        ctx.beginPath();
+        ctx.moveTo(bl.x + (br.x - bl.x) * f, bl.y + (br.y - bl.y) * f);
+        ctx.lineTo(tl.x + (tr.x - tl.x) * f, tl.y + (tr.y - tl.y) * f);
+        ctx.stroke();
+      }
+      for (let j = 1; j <= 3; j++) {
+        const f = j / 4;
+        ctx.beginPath();
+        ctx.moveTo(bl.x + (tl.x - bl.x) * f, bl.y + (tl.y - bl.y) * f);
+        ctx.lineTo(br.x + (tr.x - br.x) * f, br.y + (tr.y - br.y) * f);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = '#f4f8ff';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(tl.x, tl.y); ctx.lineTo(tr.x, tr.y); ctx.stroke();
+
+      ctx.strokeStyle = '#0a0f2a';
+      ctx.lineWidth = 6; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(bl.x, bl.y); ctx.lineTo(tl.x, tl.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(br.x, br.y); ctx.lineTo(tr.x, tr.y); ctx.stroke();
+    }
+
+    function drawPlayer(p, col, isNear) {
+      const pr = P(p.x, p.y);
+      const s = pr.scale, cx = pr.x, feet = pr.y;
+
+      // grounded soft shadow cast by the key light (stays on the court plane)
+      groundShadow(cx, feet, 15 * s, 30 * s, 0.34);
+
+      // running lean about the feet
+      const leanAngle = clamp((p.lean || 0) * 0.22, -0.24, 0.24);
+      ctx.save();
+      ctx.translate(cx, feet);
+      ctx.rotate(leanAngle);
+      ctx.translate(-cx, -feet);
+
+      const bodyW = 17 * s, bodyH = 26 * s;
+      const torsoCY = feet - 18 * s;
+
+      ctx.strokeStyle = col.bodyDark; ctx.lineWidth = 5 * s; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - 4 * s, torsoCY + bodyH * 0.4); ctx.lineTo(cx - 5 * s, feet);
+      ctx.moveTo(cx + 4 * s, torsoCY + bodyH * 0.4); ctx.lineTo(cx + 5 * s, feet);
+      ctx.stroke();
+
+      const g = ctx.createLinearGradient(cx, torsoCY - bodyH / 2, cx, torsoCY + bodyH / 2);
+      g.addColorStop(0, col.body); g.addColorStop(1, col.bodyDark);
+      ctx.fillStyle = g;
+      roundRect(cx - bodyW / 2, torsoCY - bodyH / 2, bodyW, bodyH, 5 * s);
+      ctx.fill();
+      ctx.strokeStyle = col.trim; ctx.lineWidth = 1.5 * s;
+      ctx.shadowColor = col.trim; ctx.shadowBlur = 8 * s;
+      ctx.stroke(); ctx.shadowBlur = 0;
+
+      const headY = torsoCY - bodyH / 2 - 7 * s;
+      ctx.fillStyle = col.skin;
+      ctx.beginPath(); ctx.arc(cx, headY, 6.5 * s, 0, TAU); ctx.fill();
+      ctx.fillStyle = col.body;
+      ctx.beginPath(); ctx.arc(cx, headY, 6.5 * s, Math.PI, TAU); ctx.fill();
+
+      const armLen = 19 * s;
+      const shoulderX = cx + (isNear ? 6 : -6) * s;
+      const shoulderY = torsoCY - bodyH * 0.28;
+      let angle;
+      const rest = isNear ? -Math.PI * 0.5 : Math.PI * 0.5; // racket points at the ball
+      if (p.swing > 0) {
+        // start the swing on the ball (contact) and follow through from there,
+        // so the racket is visibly on the ball at the instant of the hit
+        const t = easeOutCubic(1 - p.swing);
+        const follow = isNear ? -Math.PI * 0.95 : Math.PI * 0.95;
+        angle = rest + (follow - rest) * t;
+      } else {
+        angle = rest;
+      }
+      const handX = shoulderX + Math.cos(angle) * armLen;
+      const handY = shoulderY + Math.sin(angle) * armLen;
+
+      ctx.strokeStyle = col.skin; ctx.lineWidth = 3.5 * s;
+      ctx.beginPath(); ctx.moveTo(shoulderX, shoulderY); ctx.lineTo(handX, handY); ctx.stroke();
+
+      ctx.save();
+      ctx.translate(handX + Math.cos(angle) * 9 * s, handY + Math.sin(angle) * 9 * s);
+      ctx.rotate(angle + Math.PI / 2);
+      // handle throat
+      ctx.strokeStyle = '#d8c018'; ctx.lineWidth = 2.6 * s; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0, 13 * s); ctx.lineTo(0, 18 * s); ctx.stroke();
+      // frame
+      ctx.strokeStyle = '#e8ff2e'; ctx.lineWidth = 3 * s;
+      ctx.shadowColor = '#e8ff2e'; ctx.shadowBlur = 8 * s;
+      ctx.beginPath(); ctx.ellipse(0, 0, 9 * s, 13 * s, 0, 0, TAU); ctx.stroke();
+      ctx.shadowBlur = 0;
+      // strings
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 0.6 * s;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath(); ctx.moveTo(i * 3.2 * s, -11 * s); ctx.lineTo(i * 3.2 * s, 11 * s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-7.5 * s, i * 4 * s); ctx.lineTo(7.5 * s, i * 4 * s); ctx.stroke();
+      }
+      ctx.restore(); // racket transform
+
+      ctx.restore(); // lean transform
+    }
+
+    function ballColors(shot) {
+      if (shot === 'slam') return { core: '#ffe0a8', mid: '#ff7a1a', edge: '#d63c06', glow: '255,140,30', trail: '255,150,40' };
+      if (shot === 'lob') return { core: '#ecd6ff', mid: '#b24bff', edge: '#7a1ecc', glow: '196,107,255', trail: '170,90,255' };
+      return { core: '#f8ffc0', mid: '#d8ee18', edge: '#a9c400', glow: '210,255,90', trail: '180,255,70' };
+    }
+
+    function drawBallWithTrail() {
+      const col = ballColors(ball.shot);
+
+      // speed trail — additive. A lob draws as a wiggly line, a slam as a hard
+      // straight streak, everything else as glowing dots.
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      if (ball.shot === 'lob' && ballTrail.length > 2) {
+        ctx.strokeStyle = `rgba(${col.trail},0.55)`;
+        ctx.lineWidth = 2.6;
+        ctx.shadowColor = `rgb(${col.glow})`; ctx.shadowBlur = 8;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (let i = 0; i < ballTrail.length; i++) {
+          const tr = ballTrail[i];
+          const phase = i * 0.9 + Date.now() / 110;
+          const amp = 5 * tr.life;
+          const px = tr.x + Math.cos(phase) * amp;
+          const py = tr.y + Math.sin(phase) * amp;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      } else {
+        const slam = ball.shot === 'slam';
+        for (const tr of ballTrail) {
+          const a = Math.max(0, tr.life) * (slam ? 1.5 : 1.1);
+          ctx.fillStyle = `rgba(${col.trail},${a * 0.35})`;
+          ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r * (0.5 + tr.life * (slam ? 2 : 1.4)), 0, TAU); ctx.fill();
+        }
+      }
+      ctx.restore();
+
+      // grounded contact shadow — kept strong so the ball's spot on the court
+      // is always readable, which is the main depth cue for a lofted ball.
+      const gp = P(ball.x, ball.y);
+      const hPx = ball.z * gp.scale * HEIGHT_K;
+      ctx.fillStyle = `rgba(2,6,16,${Math.max(0.28, 0.5 - ball.z / 700)})`;
+      ctx.beginPath();
+      ctx.ellipse(gp.x, gp.y, (5.5 + ball.z / 22) * gp.scale, (2.6 + ball.z / 55) * gp.scale, 0, 0, TAU);
+      ctx.fill();
+      groundShadow(gp.x, gp.y, 5 * gp.scale, hPx, 0.22);
+
+      const bp = project(ball.x, ball.y, ball.z);
+      const r = 6 * bp.scale;
+
+      // motion-blur stretch along screen-space velocity
+      const ahead = project(ball.x + ball.vx * 0.02, ball.y + ball.vy * 0.02, Math.max(0, ball.z + ball.vz * 0.02));
+      const dxs = ahead.x - bp.x, dys = ahead.y - bp.y;
+      const sspeed = Math.hypot(dxs, dys);
+      const ang = sspeed > 0.5 ? Math.atan2(dys, dxs) : 0;
+      const stretch = 1 + Math.min(1.5, sspeed / 5);
+
+      // bloom halo (tinted to the shot type)
+      const slamBoost = ball.shot === 'slam' ? 0.2 : 0;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const halo = ctx.createRadialGradient(bp.x, bp.y, 0, bp.x, bp.y, r * 2.6);
+      halo.addColorStop(0, `rgba(${col.glow},${0.35 + slamBoost + Math.min(0.35, sspeed / 20)})`);
+      halo.addColorStop(1, `rgba(${col.glow},0)`);
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(bp.x, bp.y, r * 2.6, 0, TAU); ctx.fill();
+      ctx.restore();
+
+      // fuzzy-felt ball body, stretched + spinning
+      ctx.save();
+      ctx.translate(bp.x, bp.y);
+      ctx.rotate(ang);
+      ctx.scale(stretch, 1);
+      ctx.rotate(-ang + ballSpin);
+      const rg = ctx.createRadialGradient(-r * 0.32, -r * 0.32, r * 0.15, 0, 0, r);
+      rg.addColorStop(0, col.core);
+      rg.addColorStop(0.7, col.mid);
+      rg.addColorStop(1, col.edge);
+      ctx.fillStyle = rg;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+
+      // felt seam
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1.1;
+      ctx.beginPath(); ctx.arc(-r * 0.2, 0, r * 1.15, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(r * 0.2, 0, r * 1.15, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+
+      // specular highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.35, r * 0.22, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawParticles() {
+      for (const pt of particles) {
+        ctx.globalAlpha = Math.max(0, pt.life / pt.max);
+        ctx.fillStyle = pt.color;
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.size, 0, TAU); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawFloatTexts() {
+      ctx.textAlign = 'center';
+      ctx.font = '10px "Press Start 2P", monospace';
+      for (const ft of floatTexts) {
+        ctx.globalAlpha = Math.max(0, ft.life / ft.max);
+        ctx.fillStyle = ft.color;
+        ctx.shadowColor = ft.color; ctx.shadowBlur = 6;
+        ctx.fillText(ft.txt, ft.x, ft.y);
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'start';
+    }
+
+    function drawVignette() {
+      const g = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height * 0.55, canvas.height * 0.3,
+        canvas.width / 2, canvas.height * 0.55, canvas.height * 0.8);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,0.45)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function drawChromatic() {
+      // subtle red/cyan fringe at the frame edges
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      const ring = (color, dx) => {
+        const g = ctx.createRadialGradient(
+          canvas.width / 2 + dx, canvas.height / 2, canvas.height * 0.42,
+          canvas.width / 2 + dx, canvas.height / 2, canvas.height * 0.6);
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(1, color);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      };
+      ring('rgba(255,40,40,0.05)', -2.5);
+      ring('rgba(40,220,255,0.05)', 2.5);
+      ctx.restore();
+    }
+
+    let grainOff = 0;
+    function drawGrain() {
+      grainOff = (grainOff + 7) % 40;
+      ctx.save();
+      ctx.globalAlpha = 0.035;
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.drawImage(grainTex, -grainOff, -grainOff, canvas.width + 40, canvas.height + 40);
+      ctx.restore();
+    }
+
+    function drawFlash() {
+      if (screenFlash <= 0) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,250,220,${screenFlash * 0.28})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
+    function draw() {
+      const sx = (Math.random() * 2 - 1) * shake;
+      const sy = (Math.random() * 2 - 1) * shake;
+      ctx.save();
+      ctx.translate(sx, sy);
+
+      drawBackground();
+      drawCourtSurface();
+      drawDecals();
+      drawReachHint();
+
+      // painter's algorithm: far objects first so near ones occlude them.
+      // The ball's sort key is biased by its height so a lofted ball reads as
+      // being in front of a player it's flying past, instead of behind them.
+      const ballSortY = ball.y + Math.min(ball.z, 80) * 0.9;
+      const items = [
+        { y: cpu.y, fn: () => drawPlayer(cpu, CPU_COLORS, false) },
+        { y: netY, fn: drawNet },
+        { y: ballSortY, fn: drawBallWithTrail },
+        { y: player.y, fn: () => drawPlayer(player, PLAYER_COLORS, true) },
+      ];
+      items.sort((a, b) => a.y - b.y);
+      items.forEach(it => it.fn());
+
+      drawParticles();
+      drawFloatTexts();
+
+      ctx.restore(); // end screen-shake transform
+
+      // screen-space post-processing (never shaken)
+      drawFlash();
+      drawVignette();
+      drawChromatic();
+      drawGrain();
+    }
+
+    let lastTime = performance.now();
+    function loop(now) {
+      let dt = (now - lastTime) / 1000;
+      lastTime = now;
+      dt = Math.min(dt, 0.05);
+
+      if (netMode === 'guest') {
+        // guest doesn't simulate — send input, render the host's snapshots
+        guestSendAccum += dt;
+        if (guestSendAccum >= 0.033) { guestSendAccum = 0; sendGuestInput(); }
+        updateFx(dt);
+        shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
+      } else if (!paused) {
+        if (freezeTimer > 0) {
+          // brief hit-freeze: hold the simulation for a few frames of impact
+          freezeTimer -= dt;
+        } else {
+          update(dt);
+          updateFx(dt);
+        }
+        shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
+        if (netMode === 'host') {
+          snapAccum += dt;
+          if (snapAccum >= 0.04) { snapAccum = 0; sendSnapshot(); }
+        }
+      }
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      unlockAudio();
+      const k = e.key.toLowerCase();
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+      keys[k] = true;
+      if (e.repeat) return; // discrete actions fire once per press
+      if (k === 'm') { muted = !muted; return; }
+      if (k === 'r') { if (netMode !== 'guest') newMatch(); return; }
+      if (k === 'p') {
+        if (netMode === 'local' && state !== 'match-over') {
+          paused = !paused;
+          msgEl.textContent = paused ? 'PAUSED' : '';
+        }
+        return;
+      }
+      if (k === ' ') {
+        if (netMode === 'guest') {
+          if (state === 'serving' && server === 'cpu') netSend({ t: 'msg', data: { k: 'serve' } });
+          else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
+        } else {
+          if (state === 'serving' && server === 'player') doHit('player', true);
+          else if (state === 'rally') doHit('player', false);
+        }
+      }
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('pointerdown', unlockAudio);
+
+    // ======================================================================
+    // Online play: lobby + host-authoritative netplay.
+    // Set NET_URL to your deployed Render server (see /render.yaml).
+    // ======================================================================
+    const NET_URL = 'wss://retro-arcade-tennis.onrender.com';
+    let ws = null, myId = null, oppName = '', challengerId = null;
+    const el = (id) => document.getElementById(id);
+    const MENUS = ['menuMode', 'menuName', 'menuLobby', 'menuChallenge'];
+
+    function show(menuId) {
+      MENUS.forEach(m => el(m).classList.toggle('hidden', m !== menuId));
+    }
+    function hideMenus() { MENUS.forEach(m => el(m).classList.add('hidden')); }
+    function netSend(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+    function localMoveVec() {
+      let dx = 0, dy = 0;
+      if (keys['arrowleft'] || keys['a']) dx -= 1;
+      if (keys['arrowright'] || keys['d']) dx += 1;
+      if (keys['arrowup'] || keys['w']) dy -= 1;
+      if (keys['arrowdown'] || keys['s']) dy += 1;
+      return { dx, dy };
+    }
+    function sendGuestInput() {
+      const v = localMoveVec();
+      netSend({ t: 'msg', data: { k: 'in', dx: v.dx, dy: v.dy } });
+    }
+
+    function sendSnapshot() {
+      netSend({ t: 'msg', data: {
+        k: 's',
+        b: [+ball.x.toFixed(1), +ball.y.toFixed(1), +ball.z.toFixed(1)], bs: ball.shot,
+        p: [+player.x.toFixed(1), +player.y.toFixed(1), +player.swing.toFixed(2), +(player.lean || 0).toFixed(2)],
+        c: [+cpu.x.toFixed(1), +cpu.y.toFixed(1), +cpu.swing.toFixed(2), +(cpu.lean || 0).toFixed(2)],
+        st: state, sv: server,
+        pt: [points.player, points.cpu], gm: [games.player, games.cpu],
+        mg: msgEl.textContent,
+      }});
+    }
+    // Flip host-perspective result text for the guest (guest is the 'cpu' side)
+    function guestMsg(s) {
+      return s
+        .replace(/YOU WIN THE MATCH!/i, 'OPP WINS THE MATCH')
+        .replace(/YOU WIN THE GAME!/i, 'OPP WINS THE GAME')
+        .replace(/CPU WINS THE MATCH/i, 'YOU WIN THE MATCH!')
+        .replace(/CPU WINS THE GAME/i, 'YOU WIN THE GAME!');
+    }
+    function applySnapshot(d) {
+      ball.x = d.b[0]; ball.y = d.b[1]; ball.z = d.b[2]; ball.shot = d.bs;
+      player.x = d.p[0]; player.y = d.p[1]; player.swing = d.p[2]; player.lean = d.p[3];
+      cpu.x = d.c[0]; cpu.y = d.c[1]; cpu.swing = d.c[2]; cpu.lean = d.c[3];
+      state = d.st; server = d.sv;
+      points.player = d.pt[0]; points.cpu = d.pt[1];
+      games.player = d.gm[0]; games.cpu = d.gm[1];
+      let mg;
+      if (d.st === 'serving') mg = (d.sv === 'cpu') ? 'YOUR SERVE — press SPACE' : oppName + ' is serving…';
+      else mg = guestMsg(d.mg);
+      if (msgEl.textContent !== mg) msgEl.textContent = mg;
+      updateHud();
+    }
+
+    function playSfx(d) {
+      if (d.n === 'hit') sHit(d.shot);
+      else if (d.n === 'bounce') sBounce();
+      else if (d.n === 'net') sNet();
+      else if (d.n === 'point') sPoint(!d.win); // win is from the host's side
+    }
+
+    function onPeerMsg(d) {
+      if (netMode === 'host') {
+        if (d.k === 'in') { guestInput.dx = d.dx; guestInput.dy = d.dy; }
+        else if (d.k === 'hit') remoteSwing = true;
+        else if (d.k === 'serve') remoteServe = true;
+      } else if (netMode === 'guest') {
+        if (d.k === 's') applySnapshot(d);
+        else if (d.k === 'sfx') playSfx(d);
+      }
+    }
+
+    function startOnline(role, name) {
+      oppName = name;
+      netMode = role === 'host' ? 'host' : 'guest';
+      flipView = (netMode === 'guest');
+      guestInput = { dx: 0, dy: 0 };
+      remoteSwing = remoteServe = false;
+      hideMenus();
+      if (netMode === 'host') {
+        newMatch();
+      } else {
+        state = 'point-pause';
+        msgEl.textContent = 'CONNECTED — vs ' + oppName;
+      }
+    }
+
+    function onOppLeft() {
+      netMode = 'local';
+      flipView = false;
+      state = 'match-over';
+      msgEl.textContent = 'Opponent left — press ONLINE to find another';
+      show('menuMode');
+    }
+
+    function renderLobby(players) {
+      const ul = el('playerList');
+      ul.innerHTML = '';
+      const others = players.filter(p => p.id !== myId);
+      el('lobbyHint').textContent = others.length ? 'Click FIGHT to challenge a player.' : 'Waiting for other players to join…';
+      for (const p of others) {
+        const li = document.createElement('li');
+        if (p.busy) li.classList.add('busy');
+        const nm = document.createElement('span');
+        nm.className = 'nm';
+        nm.textContent = p.name;
+        li.appendChild(nm);
+        if (p.busy) {
+          const s = document.createElement('span');
+          s.style.cssText = 'font-size:8px;color:#888';
+          s.textContent = 'in match';
+          li.appendChild(s);
+        } else {
+          const b = document.createElement('button');
+          b.textContent = 'FIGHT';
+          b.onclick = () => { netSend({ t: 'challenge', to: p.id }); el('lobbyHint').textContent = 'Challenge sent to ' + p.name + '…'; };
+          li.appendChild(b);
+        }
+        ul.appendChild(li);
+      }
+    }
+
+    function onNet(m) {
+      switch (m.t) {
+        case 'welcome': myId = m.id; show('menuLobby'); break;
+        case 'lobby': if (myId) renderLobby(m.players); break;
+        case 'challenged':
+          challengerId = m.from;
+          el('challengeText').textContent = m.name + ' wants to fight!';
+          show('menuChallenge');
+          break;
+        case 'declined': el('lobbyHint').textContent = 'Challenge declined.'; break;
+        case 'start': startOnline(m.role, m.oppName); break;
+        case 'oppLeft': onOppLeft(); break;
+        case 'msg': onPeerMsg(m.data); break;
+      }
+    }
+
+    function connect(name) {
+      el('netStatus').textContent = 'Connecting…';
+      try { ws = new WebSocket(NET_URL); }
+      catch (err) { el('netStatus').textContent = 'Bad server URL'; return; }
+      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name }); };
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onNet(m); };
+      ws.onerror = () => { el('netStatus').textContent = 'Cannot reach server'; };
+      ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
+    }
+
+    el('btnSingle').onclick = () => { netMode = 'local'; flipView = false; hideMenus(); newMatch(); };
+    el('btnOnline').onclick = () => { show('menuName'); setTimeout(() => el('nameInput').focus(), 40); };
+    el('btnNameBack').onclick = () => show('menuMode');
+    el('btnJoin').onclick = () => {
+      const name = (el('nameInput').value || '').trim() || 'Player';
+      el('netStatus').textContent = 'Joining…';
+      if (!ws) connect(name); else netSend({ t: 'hello', name });
+    };
+    el('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnJoin').click(); });
+    el('btnLobbyBack').onclick = () => { if (ws) ws.close(); ws = null; myId = null; show('menuMode'); };
+    el('btnAccept').onclick = () => netSend({ t: 'accept', to: challengerId });
+    el('btnDecline').onclick = () => { netSend({ t: 'decline', to: challengerId }); show('menuLobby'); };
+
+    updateHud();
+    show('menuMode'); // start at the mode-select screen instead of auto-starting
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
