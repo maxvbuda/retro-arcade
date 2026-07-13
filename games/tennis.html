@@ -399,6 +399,15 @@
         else { shot = 'normal'; T = rallyFlightTime(hitter); }
       }
       ball.shot = shot;
+
+      // Snap the ball onto the racket's contact point so it visibly meets the
+      // racket instead of drifting past the player. Contact height matches the
+      // stroke: an overhead slam is struck up high, a lob down low.
+      const contactZ = shot === 'slam' ? 58 : (shot === 'lob' ? 16 : 30);
+      ball.x = hitter.x;
+      ball.y = hitter.y + (side === 'player' ? -14 : 14);
+      ball.z = contactZ;
+
       if (shot === 'slam') {
         // drive it deep into the open court so it clears the net and lands hard
         target.y = side === 'player' ? courtTop + 22 + Math.random() * 22 : courtBottom - 22 - Math.random() * 22;
@@ -847,13 +856,15 @@
       const shoulderX = cx + (isNear ? 6 : -6) * s;
       const shoulderY = torsoCY - bodyH * 0.28;
       let angle;
+      const rest = isNear ? -Math.PI * 0.5 : Math.PI * 0.5; // racket points at the ball
       if (p.swing > 0) {
+        // start the swing on the ball (contact) and follow through from there,
+        // so the racket is visibly on the ball at the instant of the hit
         const t = easeOutCubic(1 - p.swing);
-        const windup = isNear ? -Math.PI * 0.05 : Math.PI * 0.05;
         const follow = isNear ? -Math.PI * 0.95 : Math.PI * 0.95;
-        angle = windup + (follow - windup) * t;
+        angle = rest + (follow - rest) * t;
       } else {
-        angle = isNear ? -Math.PI * 0.5 : Math.PI * 0.5;
+        angle = rest;
       }
       const handX = shoulderX + Math.cos(angle) * armLen;
       const handY = shoulderY + Math.sin(angle) * armLen;
