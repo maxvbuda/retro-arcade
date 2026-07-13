@@ -392,7 +392,7 @@
         const d = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
         const quality = clamp(1 - d / REACH, 0, 1);
         if (ball.z > 60 && quality > 0.45) { shot = 'slam'; T = 0.5; }
-        else if (quality < 0.3) { shot = 'lob'; T = 1.5; }
+        else if (quality < 0.1) { shot = 'lob'; T = 1.5; } // only genuine stretches
         else { shot = 'normal'; T = rallyFlightTime(hitter); }
       }
       ball.shot = shot;
