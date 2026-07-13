@@ -36,7 +36,7 @@
     </div>
     <canvas id="game" width="480" height="620"></canvas>
     <div class="overlay-msg" id="msg">GET READY!</div>
-    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; TIMING aims your shot — swing EARLY = ball goes right, LATE = goes left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; first to 4 games wins the match</p>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; TIMING aims your shot — swing EARLY = ball goes right, LATE = goes left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
   </div>
 
   <script>
@@ -161,6 +161,61 @@
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(0, 0, blur, 0, TAU); ctx.fill();
       ctx.restore();
+    }
+
+    // ---- Sound (Web Audio, synthesized on the fly — no files) -------------
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let actx = null, muted = false;
+    function audio() {
+      if (muted || !AudioCtx) return null;
+      if (!actx) actx = new AudioCtx();
+      return actx;
+    }
+    function unlockAudio() {
+      if (!AudioCtx) return;
+      if (!actx) actx = new AudioCtx();
+      if (actx.state === 'suspended') actx.resume();
+    }
+    function tone(freq, dur, type, vol, slideTo) {
+      const a = audio(); if (!a) return;
+      const t = a.currentTime;
+      const osc = a.createOscillator(), g = a.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(g); g.connect(a.destination);
+      osc.start(t); osc.stop(t + dur + 0.02);
+    }
+    function noiseBurst(dur, vol, freq) {
+      const a = audio(); if (!a) return;
+      const t = a.currentTime;
+      const n = Math.max(1, Math.floor(a.sampleRate * dur));
+      const buf = a.createBuffer(1, n, a.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const filt = a.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = freq; filt.Q.value = 1.2;
+      const g = a.createGain(); g.gain.value = vol;
+      src.connect(filt); filt.connect(g); g.connect(a.destination);
+      src.start(t);
+    }
+    function sHit(shot) {
+      if (shot === 'slam') { noiseBurst(0.06, 0.6, 520); tone(170, 0.13, 'square', 0.28, 60); }
+      else if (shot === 'lob') { noiseBurst(0.04, 0.28, 950); tone(520, 0.10, 'sine', 0.13, 380); }
+      else { noiseBurst(0.045, 0.4, 720); tone(300, 0.08, 'triangle', 0.18, 150); }
+    }
+    function sBounce() { noiseBurst(0.05, 0.22, 320); tone(130, 0.09, 'sine', 0.12, 70); }
+    function sNet() { noiseBurst(0.09, 0.3, 200); }
+    function sPoint(win) {
+      if (win) {
+        tone(523, 0.11, 'square', 0.2);
+        setTimeout(() => tone(659, 0.11, 'square', 0.2), 90);
+        setTimeout(() => tone(784, 0.16, 'square', 0.2), 180);
+      } else {
+        tone(220, 0.28, 'sawtooth', 0.18, 120);
+      }
     }
 
     // ---- Effects (swing, ball trail, particles) ---------------------------
@@ -399,6 +454,7 @@
         else { shot = 'normal'; T = rallyFlightTime(hitter); }
       }
       ball.shot = shot;
+      sHit(shot);
 
       // Snap the ball onto the racket's contact point so it visibly meets the
       // racket instead of drifting past the player. Contact height matches the
@@ -440,6 +496,7 @@
     }
 
     function handleFault(hitterSide, cause) {
+      if (cause === 'NET') sNet();
       if (servePending && hitterSide === server) {
         if (serveAttempt === 1) {
           serveAttempt = 2;
@@ -477,6 +534,7 @@
       updateHud();
       if (winnerSide === 'player') { crowdFlash = 1; screenFlash = 0.6; kick(4, 0); }
       else crowdFlash = 0.4;
+      sPoint(winnerSide === 'player');
       const other = opponentOf(winnerSide);
       const diff = points[winnerSide] - points[other];
       const prefix = reason ? reason + ' — ' : '';
@@ -562,6 +620,7 @@
         spawnPuff(ball.x, ball.y);
         addDecal(ball.x, ball.y);
         kick(Math.min(2.2, Math.abs(ball.vz) / 260), 0);
+        sBounce();
         handleBounce(ball.x, ball.y);
         if (state === 'rally') {
           ball.vz = -ball.vz * 0.55;
@@ -873,16 +932,21 @@
       ctx.beginPath(); ctx.moveTo(shoulderX, shoulderY); ctx.lineTo(handX, handY); ctx.stroke();
 
       ctx.save();
-      ctx.translate(handX + Math.cos(angle) * 6 * s, handY + Math.sin(angle) * 6 * s);
+      ctx.translate(handX + Math.cos(angle) * 9 * s, handY + Math.sin(angle) * 9 * s);
       ctx.rotate(angle + Math.PI / 2);
-      ctx.strokeStyle = '#e8ff2e'; ctx.lineWidth = 2.4 * s;
-      ctx.shadowColor = '#e8ff2e'; ctx.shadowBlur = 6 * s;
-      ctx.beginPath(); ctx.ellipse(0, 0, 6 * s, 8.5 * s, 0, 0, TAU); ctx.stroke();
+      // handle throat
+      ctx.strokeStyle = '#d8c018'; ctx.lineWidth = 2.6 * s; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0, 13 * s); ctx.lineTo(0, 18 * s); ctx.stroke();
+      // frame
+      ctx.strokeStyle = '#e8ff2e'; ctx.lineWidth = 3 * s;
+      ctx.shadowColor = '#e8ff2e'; ctx.shadowBlur = 8 * s;
+      ctx.beginPath(); ctx.ellipse(0, 0, 9 * s, 13 * s, 0, 0, TAU); ctx.stroke();
       ctx.shadowBlur = 0;
+      // strings
       ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 0.6 * s;
-      for (let i = -1; i <= 1; i++) {
-        ctx.beginPath(); ctx.moveTo(i * 3 * s, -7 * s); ctx.lineTo(i * 3 * s, 7 * s); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-5 * s, i * 3.5 * s); ctx.lineTo(5 * s, i * 3.5 * s); ctx.stroke();
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath(); ctx.moveTo(i * 3.2 * s, -11 * s); ctx.lineTo(i * 3.2 * s, 11 * s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-7.5 * s, i * 4 * s); ctx.lineTo(7.5 * s, i * 4 * s); ctx.stroke();
       }
       ctx.restore(); // racket transform
 
@@ -1109,9 +1173,11 @@
     }
 
     window.addEventListener('keydown', (e) => {
+      unlockAudio();
       const k = e.key.toLowerCase();
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
       keys[k] = true;
+      if (k === 'm') { muted = !muted; return; }
       if (k === 'r') { newMatch(); return; }
       if (k === 'p') {
         if (state !== 'match-over') {
@@ -1126,6 +1192,7 @@
       }
     });
     window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('pointerdown', unlockAudio);
 
     updateHud();
     newMatch();
