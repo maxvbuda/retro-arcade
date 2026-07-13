@@ -1,0 +1,13 @@
+# Render.com blueprint for the online-tennis lobby server.
+# After deploying, copy the service's URL and set it as the WebSocket endpoint
+# in games/tennis.html (the NET_URL constant), e.g.
+#   wss://retro-arcade-tennis.onrender.com
+services:
+  - type: web
+    name: retro-arcade-tennis
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /

@@ -21,6 +21,43 @@
       100% { transform: scale(1); }
     }
     canvas { background: #06080f; }
+
+    /* ---- Lobby / matchmaking overlay ---- */
+    .lobby {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; padding: 20px;
+      background: rgba(6, 8, 15, 0.92);
+      font-family: 'Press Start 2P', monospace; color: #f4f4f4;
+      text-align: center;
+    }
+    .lobby.hidden { display: none; }
+    .lobby h2 { color: #2ee8ff; font-size: 15px; margin: 0 0 4px; text-shadow: 0 0 8px #2ee8ff; }
+    .lobby p { font-size: 9px; color: #9fb2c8; margin: 0; line-height: 1.7; }
+    .lobby input {
+      font-family: inherit; font-size: 11px; padding: 10px 12px; width: 220px; max-width: 80%;
+      background: #10131f; color: #fff; border: 2px solid #2ee8ff; border-radius: 6px; text-align: center;
+    }
+    .lobby button {
+      font-family: inherit; font-size: 10px; padding: 11px 16px; cursor: pointer;
+      background: #14141f; color: #ffe62e; border: 2px solid #ffe62e; border-radius: 6px;
+      box-shadow: 0 0 8px rgba(255, 230, 46, 0.35); transition: transform 0.1s, box-shadow 0.1s;
+    }
+    .lobby button:hover { transform: translateY(-2px); box-shadow: 0 0 14px rgba(255, 230, 46, 0.7); }
+    .lobby button.alt { color: #2ee8ff; border-color: #2ee8ff; box-shadow: 0 0 8px rgba(46, 232, 255, 0.35); }
+    .lobby .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    #playerList {
+      list-style: none; padding: 0; margin: 0; width: 300px; max-width: 90%;
+      max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+    }
+    #playerList li {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      background: #10131f; border: 2px solid #26314a; border-radius: 6px; padding: 8px 10px; font-size: 10px;
+    }
+    #playerList li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #playerList li button { font-size: 8px; padding: 7px 9px; }
+    #playerList li.busy { opacity: 0.45; }
+    #netStatus { font-size: 9px; color: #ff2e88; min-height: 12px; }
   </style>
 </head>
 <body>
@@ -34,7 +71,47 @@
       <div>POINTS <span id="points">0-0</span></div>
       <div>SERVING <span id="serving">YOU</span></div>
     </div>
-    <canvas id="game" width="480" height="620"></canvas>
+    <div style="position: relative; width: 480px; max-width: 100%;">
+      <canvas id="game" width="480" height="620"></canvas>
+
+      <!-- Mode select -->
+      <div class="lobby" id="menuMode">
+        <h2>TENNIS</h2>
+        <p>Play the CPU, or take on a friend online.</p>
+        <div class="row">
+          <button id="btnSingle">SINGLE PLAYER</button>
+          <button class="alt" id="btnOnline">ONLINE</button>
+        </div>
+      </div>
+
+      <!-- Name entry -->
+      <div class="lobby hidden" id="menuName">
+        <h2>WHO ARE YOU?</h2>
+        <input id="nameInput" maxlength="16" placeholder="ENTER YOUR NAME" autocomplete="off" />
+        <div class="row">
+          <button id="btnJoin">JOIN LOBBY</button>
+          <button class="alt" id="btnNameBack">BACK</button>
+        </div>
+        <p id="netStatus"></p>
+      </div>
+
+      <!-- Lobby list -->
+      <div class="lobby hidden" id="menuLobby">
+        <h2>CHOOSE WHO TO FIGHT</h2>
+        <ul id="playerList"></ul>
+        <p id="lobbyHint">Waiting for other players to join…</p>
+        <div class="row"><button class="alt" id="btnLobbyBack">LEAVE LOBBY</button></div>
+      </div>
+
+      <!-- Incoming challenge -->
+      <div class="lobby hidden" id="menuChallenge">
+        <h2 id="challengeText">wants to fight!</h2>
+        <div class="row">
+          <button id="btnAccept">ACCEPT</button>
+          <button class="alt" id="btnDecline">DECLINE</button>
+        </div>
+      </div>
+    </div>
     <div class="overlay-msg" id="msg">GET READY!</div>
     <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; TIMING aims your shot — swing EARLY = ball goes right, LATE = goes left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
   </div>
@@ -63,6 +140,14 @@
     let paused = false;
     let state = 'point-pause'; // 'serving' | 'rally' | 'point-pause' | 'match-over'
     let server = 'player';
+
+    // Networking: 'local' plays the CPU, 'host' runs the authoritative sim for
+    // an online match, 'guest' renders snapshots and sends its inputs.
+    let netMode = 'local';
+    let flipView = false;           // guest sees the court flipped so they're at the bottom
+    let guestInput = { dx: 0, dy: 0 };
+    let remoteSwing = false, remoteServe = false;
+    let snapAccum = 0, guestSendAccum = 0;
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
     let bounceCount = 0, lastHitter = null;
     let games = { player: 0, cpu: 0 };
@@ -90,6 +175,7 @@
     const CPU_COLORS = { body: '#ff3b6b', bodyDark: '#b81048', trim: '#ff8adf', skin: '#e8b48c' };
 
     function project(wx, wy, wz) {
+      if (flipView) { wx = courtLeft + courtRight - wx; wy = courtTop + courtBottom - wy; }
       const t = (wy - courtTop) / (courtBottom - courtTop);
       const tv = t <= 0 ? t : Math.pow(t, 1.15);
       const half = FAR_HALF + (NEAR_HALF - FAR_HALF) * t;
@@ -217,6 +303,10 @@
         tone(220, 0.28, 'sawtooth', 0.18, 120);
       }
     }
+    // Host relays one-shot sound events so the guest hears them too.
+    function relaySfx(n, extra) {
+      if (netMode === 'host') netSend({ t: 'msg', data: Object.assign({ k: 'sfx', n }, extra || {}) });
+    }
 
     // ---- Effects (swing, ball trail, particles) ---------------------------
     let particles = [];
@@ -292,15 +382,15 @@
       if (screenFlash > 0) screenFlash = Math.max(0, screenFlash - dt / 0.4);
     }
 
-    function pointsDisplay() {
-      const p = points.player, c = points.cpu;
+    function pointsStr(p, c) {
       if (p >= 3 && c >= 3) {
         if (p === c) return 'DEUCE';
-        return p > c ? 'ADV YOU' : 'ADV CPU';
+        return p > c ? 'ADV YOU' : 'ADV OPP';
       }
       const n = ['0', '15', '30', '40'];
       return n[Math.min(p, 3)] + '-' + n[Math.min(c, 3)];
     }
+    function pointsDisplay() { return pointsStr(points.player, points.cpu); }
 
     function setHud(el, value) {
       if (el.textContent === String(value)) return;
@@ -311,9 +401,16 @@
     }
 
     function updateHud() {
+      if (netMode === 'guest') {
+        // guest is the far ('cpu') player — show the score from their side
+        setHud(gamesEl, games.cpu + '-' + games.player);
+        setHud(pointsEl, pointsStr(points.cpu, points.player));
+        setHud(servingEl, server === 'cpu' ? 'YOU' : 'OPP');
+        return;
+      }
       setHud(gamesEl, games.player + '-' + games.cpu);
       setHud(pointsEl, pointsDisplay());
-      setHud(servingEl, server === 'player' ? 'YOU' : 'CPU');
+      setHud(servingEl, server === 'player' ? 'YOU' : (netMode === 'local' ? 'CPU' : 'OPP'));
     }
 
     function checkSetWin() {
@@ -411,6 +508,18 @@
       return shotTarget('cpu', bias, depth);
     }
 
+    // Timing-based aim for a human-controlled far player (online guest). The
+    // guest's view is flipped, so the signs mirror playerChooseShot to keep
+    // "swing early = your right" true on their screen.
+    function farChooseShot() {
+      const timingErr = clamp((cpu.y - ball.y) / REACH, -1.2, 1.2);
+      const xBias = clamp(timingErr * 1.3, -1, 1);
+      let depth = 'normal';
+      if (guestInput.dy < -0.3) depth = 'deep';
+      else if (guestInput.dy > 0.3) depth = 'short';
+      return shotTarget('cpu', xBias, depth);
+    }
+
     function serveTarget(side) {
       const bias = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.4);
       return shotTarget(side, bias, 'deep');
@@ -435,7 +544,9 @@
       if (isServe) servePending = true;
       bounceCount = 0;
       lastHitter = side;
-      const target = isServe ? serveTarget(side) : (side === 'player' ? playerChooseShot() : cpuChooseShot());
+      const target = isServe ? serveTarget(side)
+        : (side === 'player' ? playerChooseShot()
+          : (netMode === 'host' ? farChooseShot() : cpuChooseShot()));
 
       // Classify the shot. You can only SLAM an incoming lob (the floaty
       // purple ball) with a clean strike — a fast, steep, hard-to-return bolt.
@@ -455,6 +566,7 @@
       }
       ball.shot = shot;
       sHit(shot);
+      relaySfx('hit', { shot });
 
       // Snap the ball onto the racket's contact point so it visibly meets the
       // racket instead of drifting past the player. Contact height matches the
@@ -496,7 +608,7 @@
     }
 
     function handleFault(hitterSide, cause) {
-      if (cause === 'NET') sNet();
+      if (cause === 'NET') { sNet(); relaySfx('net'); }
       if (servePending && hitterSide === server) {
         if (serveAttempt === 1) {
           serveAttempt = 2;
@@ -535,6 +647,7 @@
       if (winnerSide === 'player') { crowdFlash = 1; screenFlash = 0.6; kick(4, 0); }
       else crowdFlash = 0.4;
       sPoint(winnerSide === 'player');
+      relaySfx('point', { win: winnerSide === 'player' });
       const other = opponentOf(winnerSide);
       const diff = points[winnerSide] - points[other];
       const prefix = reason ? reason + ' — ' : '';
@@ -574,7 +687,25 @@
       player.lean = (player.lean || 0) + (dx - (player.lean || 0)) * Math.min(1, dt * 8);
     }
 
+    // Online host: the far player is a human guest. Move it from their input
+    // (their view is flipped 180°, so negate both axes) and swing on demand.
+    function updateRemotePlayer(dt) {
+      let dx = -guestInput.dx, dy = -guestInput.dy;
+      if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
+      cpu.x = clamp(cpu.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
+      cpu.y = clamp(cpu.y + dy * MOVE_SPEED * dt, courtTop - 20, netY - 15);
+      const leanTarget = Math.abs(dx) > 0.05 ? Math.sign(dx) : 0;
+      cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
+
+      if (state === 'rally' && lastHitter !== 'cpu' && remoteSwing) {
+        const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
+        if (dist <= REACH && ball.z <= MAX_REACH_Z) doHit('cpu', false);
+      }
+      remoteSwing = false;
+    }
+
     function updateCPU(dt) {
+      if (netMode === 'host') { updateRemotePlayer(dt); return; }
       if (cpu.reactTimer > 0) cpu.reactTimer -= dt;
       const reacting = cpu.reactTimer <= 0;
       const incoming = state === 'rally' && ball.y < netY && lastHitter !== 'cpu';
@@ -621,6 +752,7 @@
         addDecal(ball.x, ball.y);
         kick(Math.min(2.2, Math.abs(ball.vz) / 260), 0);
         sBounce();
+        relaySfx('bounce');
         handleBounce(ball.x, ball.y);
         if (state === 'rally') {
           ball.vz = -ball.vz * 0.55;
@@ -634,8 +766,12 @@
       updatePlayerMovement(dt);
       updateCPU(dt);
       if (state === 'serving' && server === 'cpu') {
-        cpuServeTimer -= dt * 1000;
-        if (cpuServeTimer <= 0) doHit('cpu', true);
+        if (netMode === 'host') {
+          if (remoteServe) { remoteServe = false; doHit('cpu', true); }
+        } else {
+          cpuServeTimer -= dt * 1000;
+          if (cpuServeTimer <= 0) doHit('cpu', true);
+        }
       } else if (state === 'rally') {
         updateBallPhysics(dt);
       }
@@ -823,11 +959,13 @@
     }
 
     function drawReachHint() {
-      const canAct = state === 'rally' || (state === 'serving' && server === 'player');
+      const me = netMode === 'guest' ? cpu : player;
+      const mySide = netMode === 'guest' ? 'cpu' : 'player';
+      const canAct = state === 'rally' || (state === 'serving' && server === mySide);
       if (!canAct) return;
-      const dist = Math.hypot(ball.x - player.x, ball.y - player.y);
+      const dist = Math.hypot(ball.x - me.x, ball.y - me.y);
       const ready = dist <= REACH && ball.z <= MAX_REACH_Z;
-      const pr = P(player.x, player.y);
+      const pr = P(me.x, me.y);
       ctx.strokeStyle = ready ? 'rgba(255,230,46,0.85)' : 'rgba(255,255,255,0.16)';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -1158,7 +1296,14 @@
       let dt = (now - lastTime) / 1000;
       lastTime = now;
       dt = Math.min(dt, 0.05);
-      if (!paused) {
+
+      if (netMode === 'guest') {
+        // guest doesn't simulate — send input, render the host's snapshots
+        guestSendAccum += dt;
+        if (guestSendAccum >= 0.033) { guestSendAccum = 0; sendGuestInput(); }
+        updateFx(dt);
+        shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
+      } else if (!paused) {
         if (freezeTimer > 0) {
           // brief hit-freeze: hold the simulation for a few frames of impact
           freezeTimer -= dt;
@@ -1167,6 +1312,10 @@
           updateFx(dt);
         }
         shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
+        if (netMode === 'host') {
+          snapAccum += dt;
+          if (snapAccum >= 0.04) { snapAccum = 0; sendSnapshot(); }
+        }
       }
       draw();
       requestAnimationFrame(loop);
@@ -1177,25 +1326,199 @@
       const k = e.key.toLowerCase();
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
       keys[k] = true;
+      if (e.repeat) return; // discrete actions fire once per press
       if (k === 'm') { muted = !muted; return; }
-      if (k === 'r') { newMatch(); return; }
+      if (k === 'r') { if (netMode !== 'guest') newMatch(); return; }
       if (k === 'p') {
-        if (state !== 'match-over') {
+        if (netMode === 'local' && state !== 'match-over') {
           paused = !paused;
           msgEl.textContent = paused ? 'PAUSED' : '';
         }
         return;
       }
       if (k === ' ') {
-        if (state === 'serving' && server === 'player') doHit('player', true);
-        else if (state === 'rally') doHit('player', false);
+        if (netMode === 'guest') {
+          if (state === 'serving' && server === 'cpu') netSend({ t: 'msg', data: { k: 'serve' } });
+          else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
+        } else {
+          if (state === 'serving' && server === 'player') doHit('player', true);
+          else if (state === 'rally') doHit('player', false);
+        }
       }
     });
     window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
     window.addEventListener('pointerdown', unlockAudio);
 
+    // ======================================================================
+    // Online play: lobby + host-authoritative netplay.
+    // Set NET_URL to your deployed Render server (see /render.yaml).
+    // ======================================================================
+    const NET_URL = 'wss://retro-arcade-tennis.onrender.com';
+    let ws = null, myId = null, oppName = '', challengerId = null;
+    const el = (id) => document.getElementById(id);
+    const MENUS = ['menuMode', 'menuName', 'menuLobby', 'menuChallenge'];
+
+    function show(menuId) {
+      MENUS.forEach(m => el(m).classList.toggle('hidden', m !== menuId));
+    }
+    function hideMenus() { MENUS.forEach(m => el(m).classList.add('hidden')); }
+    function netSend(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+    function localMoveVec() {
+      let dx = 0, dy = 0;
+      if (keys['arrowleft'] || keys['a']) dx -= 1;
+      if (keys['arrowright'] || keys['d']) dx += 1;
+      if (keys['arrowup'] || keys['w']) dy -= 1;
+      if (keys['arrowdown'] || keys['s']) dy += 1;
+      return { dx, dy };
+    }
+    function sendGuestInput() {
+      const v = localMoveVec();
+      netSend({ t: 'msg', data: { k: 'in', dx: v.dx, dy: v.dy } });
+    }
+
+    function sendSnapshot() {
+      netSend({ t: 'msg', data: {
+        k: 's',
+        b: [+ball.x.toFixed(1), +ball.y.toFixed(1), +ball.z.toFixed(1)], bs: ball.shot,
+        p: [+player.x.toFixed(1), +player.y.toFixed(1), +player.swing.toFixed(2), +(player.lean || 0).toFixed(2)],
+        c: [+cpu.x.toFixed(1), +cpu.y.toFixed(1), +cpu.swing.toFixed(2), +(cpu.lean || 0).toFixed(2)],
+        st: state, sv: server,
+        pt: [points.player, points.cpu], gm: [games.player, games.cpu],
+        mg: msgEl.textContent,
+      }});
+    }
+    // Flip host-perspective result text for the guest (guest is the 'cpu' side)
+    function guestMsg(s) {
+      return s
+        .replace(/YOU WIN THE MATCH!/i, 'OPP WINS THE MATCH')
+        .replace(/YOU WIN THE GAME!/i, 'OPP WINS THE GAME')
+        .replace(/CPU WINS THE MATCH/i, 'YOU WIN THE MATCH!')
+        .replace(/CPU WINS THE GAME/i, 'YOU WIN THE GAME!');
+    }
+    function applySnapshot(d) {
+      ball.x = d.b[0]; ball.y = d.b[1]; ball.z = d.b[2]; ball.shot = d.bs;
+      player.x = d.p[0]; player.y = d.p[1]; player.swing = d.p[2]; player.lean = d.p[3];
+      cpu.x = d.c[0]; cpu.y = d.c[1]; cpu.swing = d.c[2]; cpu.lean = d.c[3];
+      state = d.st; server = d.sv;
+      points.player = d.pt[0]; points.cpu = d.pt[1];
+      games.player = d.gm[0]; games.cpu = d.gm[1];
+      let mg;
+      if (d.st === 'serving') mg = (d.sv === 'cpu') ? 'YOUR SERVE — press SPACE' : oppName + ' is serving…';
+      else mg = guestMsg(d.mg);
+      if (msgEl.textContent !== mg) msgEl.textContent = mg;
+      updateHud();
+    }
+
+    function playSfx(d) {
+      if (d.n === 'hit') sHit(d.shot);
+      else if (d.n === 'bounce') sBounce();
+      else if (d.n === 'net') sNet();
+      else if (d.n === 'point') sPoint(!d.win); // win is from the host's side
+    }
+
+    function onPeerMsg(d) {
+      if (netMode === 'host') {
+        if (d.k === 'in') { guestInput.dx = d.dx; guestInput.dy = d.dy; }
+        else if (d.k === 'hit') remoteSwing = true;
+        else if (d.k === 'serve') remoteServe = true;
+      } else if (netMode === 'guest') {
+        if (d.k === 's') applySnapshot(d);
+        else if (d.k === 'sfx') playSfx(d);
+      }
+    }
+
+    function startOnline(role, name) {
+      oppName = name;
+      netMode = role === 'host' ? 'host' : 'guest';
+      flipView = (netMode === 'guest');
+      guestInput = { dx: 0, dy: 0 };
+      remoteSwing = remoteServe = false;
+      hideMenus();
+      if (netMode === 'host') {
+        newMatch();
+      } else {
+        state = 'point-pause';
+        msgEl.textContent = 'CONNECTED — vs ' + oppName;
+      }
+    }
+
+    function onOppLeft() {
+      netMode = 'local';
+      flipView = false;
+      state = 'match-over';
+      msgEl.textContent = 'Opponent left — press ONLINE to find another';
+      show('menuMode');
+    }
+
+    function renderLobby(players) {
+      const ul = el('playerList');
+      ul.innerHTML = '';
+      const others = players.filter(p => p.id !== myId);
+      el('lobbyHint').textContent = others.length ? 'Click FIGHT to challenge a player.' : 'Waiting for other players to join…';
+      for (const p of others) {
+        const li = document.createElement('li');
+        if (p.busy) li.classList.add('busy');
+        const nm = document.createElement('span');
+        nm.className = 'nm';
+        nm.textContent = p.name;
+        li.appendChild(nm);
+        if (p.busy) {
+          const s = document.createElement('span');
+          s.style.cssText = 'font-size:8px;color:#888';
+          s.textContent = 'in match';
+          li.appendChild(s);
+        } else {
+          const b = document.createElement('button');
+          b.textContent = 'FIGHT';
+          b.onclick = () => { netSend({ t: 'challenge', to: p.id }); el('lobbyHint').textContent = 'Challenge sent to ' + p.name + '…'; };
+          li.appendChild(b);
+        }
+        ul.appendChild(li);
+      }
+    }
+
+    function onNet(m) {
+      switch (m.t) {
+        case 'welcome': myId = m.id; show('menuLobby'); break;
+        case 'lobby': if (myId) renderLobby(m.players); break;
+        case 'challenged':
+          challengerId = m.from;
+          el('challengeText').textContent = m.name + ' wants to fight!';
+          show('menuChallenge');
+          break;
+        case 'declined': el('lobbyHint').textContent = 'Challenge declined.'; break;
+        case 'start': startOnline(m.role, m.oppName); break;
+        case 'oppLeft': onOppLeft(); break;
+        case 'msg': onPeerMsg(m.data); break;
+      }
+    }
+
+    function connect(name) {
+      el('netStatus').textContent = 'Connecting…';
+      try { ws = new WebSocket(NET_URL); }
+      catch (err) { el('netStatus').textContent = 'Bad server URL'; return; }
+      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name }); };
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onNet(m); };
+      ws.onerror = () => { el('netStatus').textContent = 'Cannot reach server'; };
+      ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
+    }
+
+    el('btnSingle').onclick = () => { netMode = 'local'; flipView = false; hideMenus(); newMatch(); };
+    el('btnOnline').onclick = () => { show('menuName'); setTimeout(() => el('nameInput').focus(), 40); };
+    el('btnNameBack').onclick = () => show('menuMode');
+    el('btnJoin').onclick = () => {
+      const name = (el('nameInput').value || '').trim() || 'Player';
+      el('netStatus').textContent = 'Joining…';
+      if (!ws) connect(name); else netSend({ t: 'hello', name });
+    };
+    el('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnJoin').click(); });
+    el('btnLobbyBack').onclick = () => { if (ws) ws.close(); ws = null; myId = null; show('menuMode'); };
+    el('btnAccept').onclick = () => netSend({ t: 'accept', to: challengerId });
+    el('btnDecline').onclick = () => { netSend({ t: 'decline', to: challengerId }); show('menuLobby'); };
+
     updateHud();
-    newMatch();
+    show('menuMode'); // start at the mode-select screen instead of auto-starting
     requestAnimationFrame(loop);
   })();
   </script>

@@ -1,0 +1,13 @@
+{
+  "name": "retro-arcade-tennis-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lobby + relay server for Retro Arcade online tennis",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
