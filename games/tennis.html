@@ -55,6 +55,9 @@
     const REACH = 42, MAX_REACH_Z = 90;
     const GRAVITY = 560, NET_HEIGHT = 24; // lower g = flatter arc that hugs the court
     const MOVE_SPEED = 190, CPU_SPEED = 170;
+    // CPU imperfection: it reacts a beat late to each incoming shot, and now
+    // and then commits an unforced error (misreads the ball and mispositions).
+    const CPU_REACT_BASE = 0.14, CPU_REACT_JITTER = 0.12, CPU_ERR_CHANCE = 0.15;
 
     let keys = {};
     let paused = false;
@@ -66,7 +69,7 @@
     let points = { player: 0, cpu: 0 };
 
     const player = { x: courtCX, y: courtBottom - 30, swing: 0 };
-    const cpu = { x: courtCX, y: courtTop + 55, swing: 0 };
+    const cpu = { x: courtCX, y: courtTop + 55, swing: 0, reactTimer: 0, willError: false, errOffset: 0 };
     const ball = { x: courtCX, y: courtBottom - 45, z: 45, vx: 0, vy: 0, vz: 0 };
 
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -384,6 +387,19 @@
       spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
       const spd = Math.hypot(ball.vx, ball.vy);
       kick(clamp(spd / 150, 1.5, 5), side === 'player' ? 0.035 : 0);
+
+      // Arm the CPU's response to this incoming shot: a reaction delay always,
+      // and occasionally a full-blown unforced error (late + misread).
+      if (side === 'player') {
+        cpu.reactTimer = CPU_REACT_BASE + Math.random() * CPU_REACT_JITTER;
+        cpu.willError = Math.random() < CPU_ERR_CHANCE;
+        if (cpu.willError) {
+          cpu.reactTimer += 0.22 + Math.random() * 0.18;
+          cpu.errOffset = (Math.random() < 0.5 ? -1 : 1) * (32 + Math.random() * 42);
+        } else {
+          cpu.errOffset = 0;
+        }
+      }
       state = 'rally';
     }
 
@@ -465,20 +481,29 @@
     }
 
     function updateCPU(dt) {
-      const trackingBall = state === 'rally' && ball.y < netY;
-      const targetX = trackingBall ? clamp(ball.x, courtLeft + 15, courtRight - 15) : courtCX;
-      const dx = targetX - cpu.x;
+      if (cpu.reactTimer > 0) cpu.reactTimer -= dt;
+      const reacting = cpu.reactTimer <= 0;
+      const incoming = state === 'rally' && ball.y < netY && lastHitter !== 'cpu';
+
+      // Until the reaction timer elapses the CPU is caught flat-footed and
+      // holds its ground, so quick/wide shots can get past it. On an unforced-
+      // error shot it also misreads the ball, chasing the wrong spot.
+      const chase = incoming && reacting;
+      const aimX = chase
+        ? clamp(ball.x + (cpu.willError ? cpu.errOffset : 0), courtLeft + 15, courtRight - 15)
+        : (incoming ? cpu.x : courtCX);
+      const dx = aimX - cpu.x;
       const step = Math.sign(dx) * Math.min(Math.abs(dx), CPU_SPEED * dt);
       cpu.x = clamp(cpu.x + step, courtLeft - 20, courtRight + 20);
       const leanTarget = Math.abs(dx) > 2 ? Math.sign(dx) : 0;
       cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
 
-      const desiredY = trackingBall ? clamp(ball.y - 6, courtTop - 15, netY - 25) : courtTop + 55;
+      const desiredY = chase ? clamp(ball.y - 6, courtTop - 15, netY - 25) : courtTop + 55;
       cpu.y = clamp(cpu.y + (desiredY - cpu.y) * Math.min(1, dt * 4), courtTop - 20, netY - 15);
 
-      if (state === 'rally' && lastHitter !== 'cpu') {
+      if (incoming) {
         const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
-        if (dist <= REACH && ball.z <= MAX_REACH_Z && ball.y < netY) {
+        if (dist <= REACH && ball.z <= MAX_REACH_Z) {
           doHit('cpu', false);
         }
       }
