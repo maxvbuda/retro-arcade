@@ -78,6 +78,7 @@
       <div class="lobby" id="menuMode">
         <h2>TENNIS</h2>
         <p>Play the CPU, or take on a friend online.</p>
+        <input id="modeName" maxlength="16" placeholder="YOUR NAME" autocomplete="off" />
         <div class="row">
           <button id="btnSingle">SINGLE PLAYER</button>
           <button class="alt" id="btnOnline">ONLINE</button>
@@ -113,7 +114,7 @@
       </div>
     </div>
     <div class="overlay-msg" id="msg">GET READY!</div>
-    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing &middot; SERVE: aim with ◀ ▶, SPACE to serve &middot; RALLY timing aims — EARLY = right, LATE = left &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing &middot; SERVE: SPACE (only \"Max\" can aim it with ◀ ▶) &middot; RALLY timing aims — EARLY = right, LATE = left &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
   </div>
 
   <script>
@@ -150,6 +151,9 @@
     let snapAccum = 0, guestSendAccum = 0;
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
     let serveAiming = false, serveBias = 0; // hold-and-aim serving
+    let username = '';
+    // Only the player named "Max" gets the steerable serve-aim ability.
+    function canAim() { return username.trim().toLowerCase() === 'max'; }
     let bounceCount = 0, lastHitter = null;
     let games = { player: 0, cpu: 0 };
     let points = { player: 0, cpu: 0 };
@@ -432,10 +436,12 @@
 
     function beginServeState() {
       state = 'serving';
-      serveAiming = (server === 'player');
+      serveAiming = (server === 'player' && canAim());
       serveBias = 0;
       positionBallForServe();
-      msgEl.textContent = server === 'player' ? 'AIM with ◀ ▶ — SPACE to serve' : "CPU serving...";
+      msgEl.textContent = server === 'player'
+        ? (serveAiming ? 'AIM with ◀ ▶ — SPACE to serve' : 'YOUR SERVE — press SPACE')
+        : "CPU serving...";
       if (server === 'cpu') cpuServeTimer = 700 + Math.random() * 500;
     }
 
@@ -1384,8 +1390,10 @@
           if (state === 'serving' && server === 'cpu') netSend({ t: 'msg', data: { k: 'serve' } });
           else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
         } else {
-          if (state === 'serving' && server === 'player' && serveAiming) fireServe();
-          else if (state === 'rally') doHit('player', false);
+          if (state === 'serving' && server === 'player') {
+            if (serveAiming) fireServe();          // Max: fire the aimed serve
+            else { serveBias = 0; doHit('player', true); } // everyone else: plain serve
+          } else if (state === 'rally') doHit('player', false);
         }
       }
     });
@@ -1547,14 +1555,22 @@
       ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
     }
 
-    el('btnSingle').onclick = () => { netMode = 'local'; flipView = false; hideMenus(); newMatch(); };
-    el('btnOnline').onclick = () => { show('menuName'); setTimeout(() => el('nameInput').focus(), 40); };
+    el('btnSingle').onclick = () => {
+      username = (el('modeName').value || '').trim();
+      netMode = 'local'; flipView = false; hideMenus(); newMatch();
+    };
+    el('btnOnline').onclick = () => {
+      el('nameInput').value = (el('modeName').value || '').trim();
+      show('menuName'); setTimeout(() => el('nameInput').focus(), 40);
+    };
     el('btnNameBack').onclick = () => show('menuMode');
     el('btnJoin').onclick = () => {
       const name = (el('nameInput').value || '').trim() || 'Player';
+      username = name;
       el('netStatus').textContent = 'Joining…';
       if (!ws) connect(name); else netSend({ t: 'hello', name });
     };
+    el('modeName').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnSingle').click(); });
     el('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnJoin').click(); });
     el('btnLobbyBack').onclick = () => { if (ws) ws.close(); ws = null; myId = null; show('menuMode'); };
     el('btnAccept').onclick = () => netSend({ t: 'accept', to: challengerId });
