@@ -70,7 +70,7 @@
 
     const player = { x: courtCX, y: courtBottom - 30, swing: 0 };
     const cpu = { x: courtCX, y: courtTop + 55, swing: 0, reactTimer: 0, willError: false, errOffset: 0 };
-    const ball = { x: courtCX, y: courtBottom - 45, z: 45, vx: 0, vy: 0, vz: 0 };
+    const ball = { x: courtCX, y: courtBottom - 45, z: 45, vx: 0, vy: 0, vz: 0, shot: 'normal' };
 
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
     function opponentOf(side) { return side === 'player' ? 'cpu' : 'player'; }
@@ -381,7 +381,23 @@
       bounceCount = 0;
       lastHitter = side;
       const target = isServe ? serveTarget(side) : (side === 'player' ? playerChooseShot() : cpuChooseShot());
-      const T = isServe ? 1.05 : rallyFlightTime(hitter);
+
+      // Classify the shot by how cleanly it was struck and how high the ball
+      // was at contact. A clean strike on a high ball becomes a fast, steep
+      // SLAM; a stretched, barely-reached ball floats up as a weak LOB.
+      let T, shot;
+      if (isServe) {
+        T = 1.05; shot = 'normal';
+      } else {
+        const d = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
+        const quality = clamp(1 - d / REACH, 0, 1);
+        if (ball.z > 60 && quality > 0.45) { shot = 'slam'; T = 0.5; }
+        else if (quality < 0.3) { shot = 'lob'; T = 1.5; }
+        else { shot = 'normal'; T = rallyFlightTime(hitter); }
+      }
+      ball.shot = shot;
+      if (shot === 'slam') addFloatText(hitter.x, hitter.y, 'SLAM!', '#ff7a1a');
+      else if (shot === 'lob') addFloatText(hitter.x, hitter.y, 'LOB', '#c46bff');
       applyShot(target, T, ball.z);
       triggerSwing(hitter);
       spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
@@ -851,14 +867,42 @@
       ctx.restore(); // lean transform
     }
 
+    function ballColors(shot) {
+      if (shot === 'slam') return { core: '#ffe0a8', mid: '#ff7a1a', edge: '#d63c06', glow: '255,140,30', trail: '255,150,40' };
+      if (shot === 'lob') return { core: '#ecd6ff', mid: '#b24bff', edge: '#7a1ecc', glow: '196,107,255', trail: '170,90,255' };
+      return { core: '#f8ffc0', mid: '#d8ee18', edge: '#a9c400', glow: '210,255,90', trail: '180,255,70' };
+    }
+
     function drawBallWithTrail() {
-      // speed trail — additive so it reads as a glowing streak
+      const col = ballColors(ball.shot);
+
+      // speed trail — additive. A lob draws as a wiggly line, a slam as a hard
+      // straight streak, everything else as glowing dots.
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      for (const tr of ballTrail) {
-        const a = Math.max(0, tr.life) * 1.1;
-        ctx.fillStyle = `rgba(180,255,70,${a * 0.35})`;
-        ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r * (0.5 + tr.life * 1.4), 0, TAU); ctx.fill();
+      if (ball.shot === 'lob' && ballTrail.length > 2) {
+        ctx.strokeStyle = `rgba(${col.trail},0.55)`;
+        ctx.lineWidth = 2.6;
+        ctx.shadowColor = `rgb(${col.glow})`; ctx.shadowBlur = 8;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (let i = 0; i < ballTrail.length; i++) {
+          const tr = ballTrail[i];
+          const phase = i * 0.9 + Date.now() / 110;
+          const amp = 5 * tr.life;
+          const px = tr.x + Math.cos(phase) * amp;
+          const py = tr.y + Math.sin(phase) * amp;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      } else {
+        const slam = ball.shot === 'slam';
+        for (const tr of ballTrail) {
+          const a = Math.max(0, tr.life) * (slam ? 1.5 : 1.1);
+          ctx.fillStyle = `rgba(${col.trail},${a * 0.35})`;
+          ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r * (0.5 + tr.life * (slam ? 2 : 1.4)), 0, TAU); ctx.fill();
+        }
       }
       ctx.restore();
 
@@ -882,12 +926,13 @@
       const ang = sspeed > 0.5 ? Math.atan2(dys, dxs) : 0;
       const stretch = 1 + Math.min(1.5, sspeed / 5);
 
-      // bloom halo
+      // bloom halo (tinted to the shot type)
+      const slamBoost = ball.shot === 'slam' ? 0.2 : 0;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       const halo = ctx.createRadialGradient(bp.x, bp.y, 0, bp.x, bp.y, r * 2.6);
-      halo.addColorStop(0, `rgba(210,255,90,${0.35 + Math.min(0.35, sspeed / 20)})`);
-      halo.addColorStop(1, 'rgba(210,255,90,0)');
+      halo.addColorStop(0, `rgba(${col.glow},${0.35 + slamBoost + Math.min(0.35, sspeed / 20)})`);
+      halo.addColorStop(1, `rgba(${col.glow},0)`);
       ctx.fillStyle = halo;
       ctx.beginPath(); ctx.arc(bp.x, bp.y, r * 2.6, 0, TAU); ctx.fill();
       ctx.restore();
@@ -899,9 +944,9 @@
       ctx.scale(stretch, 1);
       ctx.rotate(-ang + ballSpin);
       const rg = ctx.createRadialGradient(-r * 0.32, -r * 0.32, r * 0.15, 0, 0, r);
-      rg.addColorStop(0, '#f8ffc0');
-      rg.addColorStop(0.7, '#d8ee18');
-      rg.addColorStop(1, '#a9c400');
+      rg.addColorStop(0, col.core);
+      rg.addColorStop(0.7, col.mid);
+      rg.addColorStop(1, col.edge);
       ctx.fillStyle = rg;
       ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
 
