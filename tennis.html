@@ -113,7 +113,7 @@
       </div>
     </div>
     <div class="overlay-msg" id="msg">GET READY!</div>
-    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing &middot; SERVE: SPACE to toss, SPACE again to hit &middot; TIMING aims — EARLY = right, LATE = left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing &middot; SERVE: hold SPACE then tap ◀ ▶ ▲ to aim (release = straight) &middot; RALLY timing aims — EARLY = right, LATE = left &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
   </div>
 
   <script>
@@ -149,8 +149,7 @@
     let remoteSwing = false, remoteServe = false;
     let snapAccum = 0, guestSendAccum = 0;
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
-    let serveState = 'ready', serveBias = 0; // toss-serve aiming
-    const TOSS_V = 300;
+    let serveAiming = false, serveBias = 0; // hold-and-aim serving
     let bounceCount = 0, lastHitter = null;
     let games = { player: 0, cpu: 0 };
     let points = { player: 0, cpu: 0 };
@@ -433,29 +432,20 @@
 
     function beginServeState() {
       state = 'serving';
-      serveState = 'ready';
+      serveAiming = false;
       positionBallForServe();
-      msgEl.textContent = server === 'player' ? 'YOUR SERVE — SPACE to toss' : "CPU serving...";
+      msgEl.textContent = server === 'player' ? 'YOUR SERVE — hold SPACE, tap a direction' : "CPU serving...";
       if (server === 'cpu') cpuServeTimer = 700 + Math.random() * 500;
     }
 
-    // Serve toss: SPACE tosses the ball up, SPACE again strikes it. When you
-    // hit decides the aim — rising (early) = right, apex = straight, falling
-    // (late) = left — the same timing idea as a rally stroke.
-    function startToss() {
-      serveState = 'tossing';
-      ball.x = player.x;
-      ball.y = player.y - 14;
-      ball.z = 24;
-      ball.vz = TOSS_V;
-      ball.vx = 0; ball.vy = 0;
-      msgEl.textContent = 'SPACE to HIT — early=right, late=left';
-    }
-
-    function strikeServe() {
-      const timing = clamp(ball.vz / TOSS_V, -1, 1); // >0 rising (early), <0 falling (late)
-      serveBias = clamp(timing * 1.2, -1, 1);
-      serveState = 'struck';
+    // Hold-and-aim serve: hold SPACE to line up, then tap a direction to fire
+    // (left / right for the corners, up for down the middle). Releasing SPACE
+    // without a direction serves straight. You can't move while aiming, so the
+    // direction keys steer the serve instead of your player.
+    function serveInDirection(bias) {
+      if (!serveAiming) return;
+      serveBias = bias;
+      serveAiming = false;
       doHit('player', true);
     }
 
@@ -701,6 +691,7 @@
     }
 
     function updatePlayerMovement(dt) {
+      if (serveAiming) return; // frozen while aiming a serve — directions steer the serve
       let dx = 0, dy = 0;
       if (keys['arrowleft'] || keys['a']) dx -= 1;
       if (keys['arrowright'] || keys['d']) dx += 1;
@@ -790,20 +781,6 @@
       if (state === 'match-over') return;
       updatePlayerMovement(dt);
       updateCPU(dt);
-
-      // animate the serve toss (rises then falls; auto-strikes if it drops)
-      if (state === 'serving' && server === 'player' && serveState === 'tossing') {
-        ball.x = player.x;
-        ball.y = player.y - 14;
-        ball.vz -= GRAVITY * dt;
-        ball.z += ball.vz * dt;
-        if (ball.z <= 0) {
-          ball.z = 0;
-          serveBias = clamp((ball.vz / TOSS_V) * 1.2, -1, 1);
-          serveState = 'struck';
-          doHit('player', true);
-        }
-      }
 
       if (state === 'serving' && server === 'cpu') {
         if (netMode === 'host') {
@@ -1011,6 +988,29 @@
       ctx.beginPath();
       ctx.ellipse(pr.x, pr.y, REACH * pr.scale, REACH * pr.scale * 0.42, 0, 0, TAU);
       ctx.stroke();
+    }
+
+    function drawServeAim() {
+      if (!serveAiming || netMode === 'guest' || state !== 'serving' || server !== 'player') return;
+      let bias = 0;
+      if (keys['arrowleft'] || keys['a']) bias = -0.85;
+      else if (keys['arrowright'] || keys['d']) bias = 0.85;
+      const halfW = (courtRight - courtLeft) / 2 - 25;
+      const tx = clamp(courtCX + bias * halfW * 0.8, courtLeft + 15, courtRight - 15);
+      const a = P(player.x, player.y - 14), b = P(tx, courtTop + 30);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,230,46,0.85)'; ctx.lineWidth = 2.5; ctx.setLineDash([7, 5]);
+      ctx.shadowColor = '#ffe62e'; ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash([]);
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      ctx.fillStyle = 'rgba(255,230,46,0.95)';
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x - Math.cos(ang - 0.42) * 11, b.y - Math.sin(ang - 0.42) * 11);
+      ctx.lineTo(b.x - Math.cos(ang + 0.42) * 11, b.y - Math.sin(ang + 0.42) * 11);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
     }
 
     function drawNet() {
@@ -1305,6 +1305,7 @@
       drawCourtSurface();
       drawDecals();
       drawReachHint();
+      drawServeAim();
 
       // painter's algorithm: far objects first so near ones occlude them.
       // The ball's sort key is biased by its height so a lofted ball reads as
@@ -1382,13 +1383,26 @@
           else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
         } else {
           if (state === 'serving' && server === 'player') {
-            if (serveState === 'ready') startToss();
-            else if (serveState === 'tossing') strikeServe();
+            serveAiming = true;
+            msgEl.textContent = 'AIM — tap ◀ ▶ ▲ (or release for straight)';
           } else if (state === 'rally') doHit('player', false);
         }
       }
+      // while aiming a serve, a direction key fires it (movement is frozen)
+      if (serveAiming && netMode !== 'guest' && state === 'serving' && server === 'player') {
+        if (k === 'arrowleft' || k === 'a') serveInDirection(-0.85);
+        else if (k === 'arrowright' || k === 'd') serveInDirection(0.85);
+        else if (k === 'arrowup' || k === 'w') serveInDirection(0);
+      }
     });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('keyup', (e) => {
+      const k = e.key.toLowerCase();
+      keys[k] = false;
+      // releasing SPACE without picking a direction serves straight
+      if (k === ' ' && serveAiming && netMode !== 'guest' && state === 'serving' && server === 'player') {
+        serveInDirection(0);
+      }
+    });
     window.addEventListener('pointerdown', unlockAudio);
 
     // ======================================================================
