@@ -392,13 +392,20 @@
       } else {
         const d = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
         const quality = clamp(1 - d / REACH, 0, 1);
-        if (incomingShot === 'lob' && quality > 0.35) { shot = 'slam'; T = 0.42; }
+        // Slam only an overhead: incoming lob, clean contact, AND ball still
+        // high — a high strike angles down over the net instead of into it.
+        if (incomingShot === 'lob' && quality > 0.35 && ball.z > 50) { shot = 'slam'; T = 0.42; }
         else if (quality < 0.1) { shot = 'lob'; T = 1.5; } // only genuine stretches
         else { shot = 'normal'; T = rallyFlightTime(hitter); }
       }
       ball.shot = shot;
-      if (shot === 'slam') addFloatText(hitter.x, hitter.y, 'SLAM!', '#ff7a1a');
-      else if (shot === 'lob') addFloatText(hitter.x, hitter.y, 'LOB', '#c46bff');
+      if (shot === 'slam') {
+        // drive it deep into the open court so it clears the net and lands hard
+        target.y = side === 'player' ? courtTop + 22 + Math.random() * 22 : courtBottom - 22 - Math.random() * 22;
+        addFloatText(hitter.x, hitter.y, 'SLAM!', '#ff7a1a');
+      } else if (shot === 'lob') {
+        addFloatText(hitter.x, hitter.y, 'LOB', '#c46bff');
+      }
       applyShot(target, T, ball.z);
       triggerSwing(hitter);
       spawnHit(hitter, side === 'player' ? PLAYER_COLORS.trim : CPU_COLORS.trim);
