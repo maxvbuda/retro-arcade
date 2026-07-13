@@ -113,7 +113,7 @@
       </div>
     </div>
     <div class="overlay-msg" id="msg">GET READY!</div>
-    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing/serve &middot; TIMING aims your shot — swing EARLY = ball goes right, LATE = goes left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
+    <p class="hint">ARROW KEYS / WASD to move &middot; SPACE to swing &middot; SERVE: SPACE to toss, SPACE again to hit &middot; TIMING aims — EARLY = right, LATE = left, on-time = straight &middot; hold UP=deep, DOWN=drop shot &middot; P to pause &middot; R to restart &middot; M mutes &middot; first to 4 games wins the match</p>
   </div>
 
   <script>
@@ -149,6 +149,8 @@
     let remoteSwing = false, remoteServe = false;
     let snapAccum = 0, guestSendAccum = 0;
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
+    let serveState = 'ready', serveBias = 0; // toss-serve aiming
+    const TOSS_V = 300;
     let bounceCount = 0, lastHitter = null;
     let games = { player: 0, cpu: 0 };
     let points = { player: 0, cpu: 0 };
@@ -431,9 +433,30 @@
 
     function beginServeState() {
       state = 'serving';
+      serveState = 'ready';
       positionBallForServe();
-      msgEl.textContent = server === 'player' ? 'YOUR SERVE — press SPACE' : "CPU serving...";
+      msgEl.textContent = server === 'player' ? 'YOUR SERVE — SPACE to toss' : "CPU serving...";
       if (server === 'cpu') cpuServeTimer = 700 + Math.random() * 500;
+    }
+
+    // Serve toss: SPACE tosses the ball up, SPACE again strikes it. When you
+    // hit decides the aim — rising (early) = right, apex = straight, falling
+    // (late) = left — the same timing idea as a rally stroke.
+    function startToss() {
+      serveState = 'tossing';
+      ball.x = player.x;
+      ball.y = player.y - 14;
+      ball.z = 24;
+      ball.vz = TOSS_V;
+      ball.vx = 0; ball.vy = 0;
+      msgEl.textContent = 'SPACE to HIT — early=right, late=left';
+    }
+
+    function strikeServe() {
+      const timing = clamp(ball.vz / TOSS_V, -1, 1); // >0 rising (early), <0 falling (late)
+      serveBias = clamp(timing * 1.2, -1, 1);
+      serveState = 'struck';
+      doHit('player', true);
     }
 
     function startServe() {
@@ -521,6 +544,8 @@
     }
 
     function serveTarget(side) {
+      // the near player aims by toss timing; the CPU/remote serve stays random
+      if (side === 'player') return shotTarget('player', serveBias, 'deep');
       const bias = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.4);
       return shotTarget(side, bias, 'deep');
     }
@@ -765,6 +790,21 @@
       if (state === 'match-over') return;
       updatePlayerMovement(dt);
       updateCPU(dt);
+
+      // animate the serve toss (rises then falls; auto-strikes if it drops)
+      if (state === 'serving' && server === 'player' && serveState === 'tossing') {
+        ball.x = player.x;
+        ball.y = player.y - 14;
+        ball.vz -= GRAVITY * dt;
+        ball.z += ball.vz * dt;
+        if (ball.z <= 0) {
+          ball.z = 0;
+          serveBias = clamp((ball.vz / TOSS_V) * 1.2, -1, 1);
+          serveState = 'struck';
+          doHit('player', true);
+        }
+      }
+
       if (state === 'serving' && server === 'cpu') {
         if (netMode === 'host') {
           if (remoteServe) { remoteServe = false; doHit('cpu', true); }
@@ -1341,8 +1381,10 @@
           if (state === 'serving' && server === 'cpu') netSend({ t: 'msg', data: { k: 'serve' } });
           else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
         } else {
-          if (state === 'serving' && server === 'player') doHit('player', true);
-          else if (state === 'rally') doHit('player', false);
+          if (state === 'serving' && server === 'player') {
+            if (serveState === 'ready') startToss();
+            else if (serveState === 'tossing') strikeServe();
+          } else if (state === 'rally') doHit('player', false);
         }
       }
     });
