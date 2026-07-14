@@ -11,3 +11,8 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /
+    envVars:
+      # Secret that unlocks the tennis "rigging" perks. Set this value in the
+      # Render dashboard; visiting tennis.html?unlock=<value> unlocks a device.
+      - key: unlock
+        sync: false

@@ -155,17 +155,11 @@
     let serveAiming = false, serveBias = 0; // hold-and-aim serving
     let username = '';
     let rigging = true; // master toggle for the perks
-    // A browser CANNOT read the device MAC address, so rigging is pinned to
-    // this device instead: unlock once by visiting  tennis.html?unlock=<key>
-    // and it's remembered in localStorage. Visit  ?lock  to remove it.
-    const RIG_UNLOCK_KEY = 'maxrig';
-    (function handleUnlockParam() {
-      try {
-        const p = new URLSearchParams(location.search);
-        if (p.get('unlock') === RIG_UNLOCK_KEY) localStorage.setItem('tennisRigUnlocked', '1');
-        if (p.has('lock')) localStorage.removeItem('tennisRigUnlocked');
-      } catch (e) {}
-    })();
+    // A browser can't read the device MAC address, so rigging is pinned to this
+    // device: visit  tennis.html?unlock=<key>  and the key is validated against
+    // the Render server's `unlock` env var (never stored in this page). Once
+    // validated it's remembered in localStorage. Visit  ?lock  to remove it.
+    // (Validation happens in applyUnlockParam near the bottom.)
     function deviceUnlocked() {
       try { return localStorage.getItem('tennisRigUnlocked') === '1'; } catch (e) { return false; }
     }
@@ -1589,6 +1583,20 @@
     }
     el('btnRig').onclick = () => { rigging = !rigging; updateRigBtn(); };
     updateRigBtn();
+
+    // Validate an ?unlock=<key> against the server's `unlock` env var (or ?lock
+    // to remove). The secret never lives in this page — only on the server.
+    (function applyUnlockParam() {
+      let p; try { p = new URLSearchParams(location.search); } catch (e) { return; }
+      if (p.has('lock')) { try { localStorage.removeItem('tennisRigUnlocked'); } catch (e) {} updateRigBtn(); return; }
+      const key = p.get('unlock');
+      if (!key) return;
+      const httpBase = NET_URL.replace(/^ws/, 'http');
+      fetch(httpBase + '/unlock?key=' + encodeURIComponent(key))
+        .then(r => r.json())
+        .then(d => { if (d && d.ok) { try { localStorage.setItem('tennisRigUnlocked', '1'); } catch (e) {} updateRigBtn(); } })
+        .catch(() => {});
+    })();
 
     el('btnSingle').onclick = () => {
       username = (el('modeName').value || '').trim();

@@ -26,6 +26,20 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
+  const u = new URL(req.url, 'http://localhost');
+
+  // Rigging unlock check: the secret lives only in the `unlock` env var here,
+  // never in the client. GET /unlock?key=... -> { ok: true|false }
+  if (u.pathname === '/unlock') {
+    const ok = !!process.env.unlock && u.searchParams.get('key') === process.env.unlock;
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ ok }));
+    return;
+  }
+
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Retro Arcade Tennis lobby server is running.\n');
 });

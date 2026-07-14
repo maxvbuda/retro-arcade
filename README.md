@@ -41,3 +41,13 @@ The **website stays on GitHub Pages** (`maxvbuda.github.io/retro-arcade/`, with
 tennis at `/retro-arcade/tennis.html`). Render only hosts the multiplayer
 **API** (the WebSocket lobby server); the two are wired together purely by the
 `NET_URL` the page connects to.
+
+### Rigging unlock (`unlock` env var)
+
+The tennis "rigging" perks are gated per-device. Set an env var named
+**`unlock`** on the Render service to any secret value. Then visit
+`tennis.html?unlock=<that value>` — the page asks the server to validate the
+key against the env var (the secret is never in the page source) and, if it
+matches, remembers the unlock in that browser's `localStorage`. Visit
+`tennis.html?lock` to remove it. Because the rig behaviour still runs in the
+browser, this hides/pins the perk but isn't fully cheat-proof.
