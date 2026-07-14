@@ -83,6 +83,8 @@
           <button id="btnSingle">SINGLE PLAYER</button>
           <button class="alt" id="btnOnline">ONLINE</button>
         </div>
+        <div class="row"><button id="btnRig">RIGGING: ON</button></div>
+        <p style="font-size:8px;color:#6a7c94;">Rigging perks only apply to the player named "Max".</p>
       </div>
 
       <!-- Name entry -->
@@ -152,8 +154,10 @@
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
     let serveAiming = false, serveBias = 0; // hold-and-aim serving
     let username = '';
-    // Only the player named "Max" gets the steerable serve-aim ability.
+    let rigging = true; // master toggle for the "Max" perks
+    // The rigging perks (serve aim, ball-to-Max, always-slam) only apply to Max.
     function canAim() { return username.trim().toLowerCase() === 'max'; }
+    function rigActive() { return rigging && canAim(); }
     let bounceCount = 0, lastHitter = null;
     let games = { player: 0, cpu: 0 };
     let points = { player: 0, cpu: 0 };
@@ -436,7 +440,7 @@
 
     function beginServeState() {
       state = 'serving';
-      serveAiming = (server === 'player' && canAim());
+      serveAiming = (server === 'player' && rigActive());
       serveBias = 0;
       positionBallForServe();
       msgEl.textContent = server === 'player'
@@ -573,6 +577,12 @@
         : (side === 'player' ? playerChooseShot()
           : (netMode === 'host' ? farChooseShot() : cpuChooseShot()));
 
+      // RIGGING: every opponent shot/serve is steered straight to Max.
+      if (rigActive() && side === 'cpu') {
+        target.x = clamp(player.x, courtLeft + 15, courtRight - 15);
+        target.y = clamp(player.y, netY + 25, courtBottom - 15);
+      }
+
       // Classify the shot. You can only SLAM an incoming lob (the floaty
       // purple ball) with a clean strike — a fast, steep, hard-to-return bolt.
       // A stretched, barely-reached ball floats up as a weak LOB.
@@ -580,6 +590,9 @@
       let T, shot;
       if (isServe) {
         T = 1.05; shot = 'normal';
+      } else if (rigActive() && side === 'player') {
+        // RIGGING: Max always slams.
+        shot = 'slam'; T = 0.42;
       } else {
         const d = Math.hypot(ball.x - hitter.x, ball.y - hitter.y);
         const quality = clamp(1 - d / REACH, 0, 1);
@@ -1554,6 +1567,10 @@
       ws.onerror = () => { el('netStatus').textContent = 'Cannot reach server'; };
       ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
     }
+
+    function updateRigBtn() { el('btnRig').textContent = 'RIGGING: ' + (rigging ? 'ON' : 'OFF'); }
+    el('btnRig').onclick = () => { rigging = !rigging; updateRigBtn(); };
+    updateRigBtn();
 
     el('btnSingle').onclick = () => {
       username = (el('modeName').value || '').trim();
