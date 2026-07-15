@@ -146,11 +146,10 @@
 
     // Networking: 'local' plays the CPU, 'host' runs the authoritative sim for
     // an online match, 'guest' renders snapshots and sends its inputs.
-    let netMode = 'local';
-    let flipView = false;           // guest sees the court flipped so they're at the bottom
-    let guestInput = { dx: 0, dy: 0 };
-    let remoteSwing = false, remoteServe = false;
-    let snapAccum = 0, guestSendAccum = 0;
+    let netMode = 'local';          // 'local' (vs CPU) or 'online' (server-run)
+    let flipView = false;           // p2 sees the court flipped so they're at the bottom
+    let mySide = 'p1', myRigged = false;
+    let onlineSendAccum = 0;
     let serveAttempt = 1, servePending = false, cpuServeTimer = 0;
     let serveAiming = false, serveBias = 0; // hold-and-aim serving
     let username = '';
@@ -161,7 +160,7 @@
     // validated it's remembered in localStorage. Visit  ?lock  to remove it.
     // (Validation happens in applyUnlockParam near the bottom.)
     function deviceUnlocked() {
-      try { return localStorage.getItem('tennisRigUnlocked') === '1'; } catch (e) { return false; }
+      try { return !!localStorage.getItem('tennisRigKey'); } catch (e) { return false; }
     }
     function canAim() { return deviceUnlocked(); }
     function rigActive() { return rigging && deviceUnlocked(); }
@@ -319,10 +318,6 @@
         tone(220, 0.28, 'sawtooth', 0.18, 120);
       }
     }
-    // Host relays one-shot sound events so the guest hears them too.
-    function relaySfx(n, extra) {
-      if (netMode === 'host') netSend({ t: 'msg', data: Object.assign({ k: 'sfx', n }, extra || {}) });
-    }
 
     // ---- Effects (swing, ball trail, particles) ---------------------------
     let particles = [];
@@ -417,13 +412,6 @@
     }
 
     function updateHud() {
-      if (netMode === 'guest') {
-        // guest is the far ('cpu') player — show the score from their side
-        setHud(gamesEl, games.cpu + '-' + games.player);
-        setHud(pointsEl, pointsStr(points.cpu, points.player));
-        setHud(servingEl, server === 'cpu' ? 'YOU' : 'OPP');
-        return;
-      }
       setHud(gamesEl, games.player + '-' + games.cpu);
       setHud(pointsEl, pointsDisplay());
       setHud(servingEl, server === 'player' ? 'YOU' : (netMode === 'local' ? 'CPU' : 'OPP'));
@@ -542,18 +530,6 @@
       return shotTarget('cpu', bias, depth);
     }
 
-    // Timing-based aim for a human-controlled far player (online guest). The
-    // guest's view is flipped, so the signs mirror playerChooseShot to keep
-    // "swing early = your right" true on their screen.
-    function farChooseShot() {
-      const timingErr = clamp((cpu.y - ball.y) / REACH, -1.2, 1.2);
-      const xBias = clamp(timingErr * 1.3, -1, 1);
-      let depth = 'normal';
-      if (guestInput.dy < -0.3) depth = 'deep';
-      else if (guestInput.dy > 0.3) depth = 'short';
-      return shotTarget('cpu', xBias, depth);
-    }
-
     function serveTarget(side) {
       // the near player aims by toss timing; the CPU/remote serve stays random
       if (side === 'player') return shotTarget('player', serveBias, 'deep');
@@ -581,8 +557,7 @@
       bounceCount = 0;
       lastHitter = side;
       const target = isServe ? serveTarget(side)
-        : (side === 'player' ? playerChooseShot()
-          : (netMode === 'host' ? farChooseShot() : cpuChooseShot()));
+        : (side === 'player' ? playerChooseShot() : cpuChooseShot());
 
       // RIGGING: every opponent shot/serve is steered straight to Max.
       if (rigActive() && side === 'cpu') {
@@ -611,7 +586,6 @@
       }
       ball.shot = shot;
       sHit(shot);
-      relaySfx('hit', { shot });
 
       // Snap the ball onto the racket's contact point so it visibly meets the
       // racket instead of drifting past the player. Contact height matches the
@@ -653,7 +627,7 @@
     }
 
     function handleFault(hitterSide, cause) {
-      if (cause === 'NET') { sNet(); relaySfx('net'); }
+      if (cause === 'NET') sNet();
       if (servePending && hitterSide === server) {
         if (serveAttempt === 1) {
           serveAttempt = 2;
@@ -692,7 +666,6 @@
       if (winnerSide === 'player') { crowdFlash = 1; screenFlash = 0.6; kick(4, 0); }
       else crowdFlash = 0.4;
       sPoint(winnerSide === 'player');
-      relaySfx('point', { win: winnerSide === 'player' });
       const other = opponentOf(winnerSide);
       const diff = points[winnerSide] - points[other];
       const prefix = reason ? reason + ' — ' : '';
@@ -733,25 +706,7 @@
       player.lean = (player.lean || 0) + (dx - (player.lean || 0)) * Math.min(1, dt * 8);
     }
 
-    // Online host: the far player is a human guest. Move it from their input
-    // (their view is flipped 180°, so negate both axes) and swing on demand.
-    function updateRemotePlayer(dt) {
-      let dx = -guestInput.dx, dy = -guestInput.dy;
-      if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
-      cpu.x = clamp(cpu.x + dx * MOVE_SPEED * dt, courtLeft - 20, courtRight + 20);
-      cpu.y = clamp(cpu.y + dy * MOVE_SPEED * dt, courtTop - 20, netY - 15);
-      const leanTarget = Math.abs(dx) > 0.05 ? Math.sign(dx) : 0;
-      cpu.lean = (cpu.lean || 0) + (leanTarget - (cpu.lean || 0)) * Math.min(1, dt * 8);
-
-      if (state === 'rally' && lastHitter !== 'cpu' && remoteSwing) {
-        const dist = Math.hypot(ball.x - cpu.x, ball.y - cpu.y);
-        if (dist <= REACH && ball.z <= MAX_REACH_Z) doHit('cpu', false);
-      }
-      remoteSwing = false;
-    }
-
     function updateCPU(dt) {
-      if (netMode === 'host') { updateRemotePlayer(dt); return; }
       if (cpu.reactTimer > 0) cpu.reactTimer -= dt;
       const reacting = cpu.reactTimer <= 0;
       const incoming = state === 'rally' && ball.y < netY && lastHitter !== 'cpu';
@@ -798,7 +753,6 @@
         addDecal(ball.x, ball.y);
         kick(Math.min(2.2, Math.abs(ball.vz) / 260), 0);
         sBounce();
-        relaySfx('bounce');
         handleBounce(ball.x, ball.y);
         if (state === 'rally') {
           ball.vz = -ball.vz * 0.55;
@@ -814,12 +768,8 @@
       if (serveAiming) updateServeAim(dt);
 
       if (state === 'serving' && server === 'cpu') {
-        if (netMode === 'host') {
-          if (remoteServe) { remoteServe = false; doHit('cpu', true); }
-        } else {
-          cpuServeTimer -= dt * 1000;
-          if (cpuServeTimer <= 0) doHit('cpu', true);
-        }
+        cpuServeTimer -= dt * 1000;
+        if (cpuServeTimer <= 0) doHit('cpu', true);
       } else if (state === 'rally') {
         updateBallPhysics(dt);
       }
@@ -1007,13 +957,11 @@
     }
 
     function drawReachHint() {
-      const me = netMode === 'guest' ? cpu : player;
-      const mySide = netMode === 'guest' ? 'cpu' : 'player';
-      const canAct = state === 'rally' || (state === 'serving' && server === mySide);
+      const canAct = state === 'rally' || (state === 'serving' && server === 'player');
       if (!canAct) return;
-      const dist = Math.hypot(ball.x - me.x, ball.y - me.y);
+      const dist = Math.hypot(ball.x - player.x, ball.y - player.y);
       const ready = dist <= REACH && ball.z <= MAX_REACH_Z;
-      const pr = P(me.x, me.y);
+      const pr = P(player.x, player.y);
       ctx.strokeStyle = ready ? 'rgba(255,230,46,0.85)' : 'rgba(255,255,255,0.16)';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -1022,7 +970,7 @@
     }
 
     function drawServeAim() {
-      if (!serveAiming || netMode === 'guest' || state !== 'serving' || server !== 'player') return;
+      if (!serveAiming || state !== 'serving' || server !== 'player') return;
       const halfW = (courtRight - courtLeft) / 2 - 25;
       const tx = clamp(courtCX + serveBias * halfW * 0.9, courtLeft + 15, courtRight - 15);
       const a = P(player.x, player.y - 14), b = P(tx, courtTop + 30);
@@ -1366,10 +1314,14 @@
       lastTime = now;
       dt = Math.min(dt, 0.05);
 
-      if (netMode === 'guest') {
-        // guest doesn't simulate — send input, render the host's snapshots
-        guestSendAccum += dt;
-        if (guestSendAccum >= 0.033) { guestSendAccum = 0; sendGuestInput(); }
+      if (netMode === 'online') {
+        // thin client: steer serve aim locally, send inputs, render snapshots
+        const wantAim = (state === 'serving' && server === 'player' && myRigged);
+        if (wantAim && !serveAiming) serveBias = 0;
+        serveAiming = wantAim;
+        if (serveAiming) updateServeAim(dt);
+        onlineSendAccum += dt;
+        if (onlineSendAccum >= 0.033) { onlineSendAccum = 0; sendOnlineInput(); }
         updateFx(dt);
         shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
       } else if (!paused) {
@@ -1381,10 +1333,6 @@
           updateFx(dt);
         }
         shake = Math.max(0, shake - shake * Math.min(1, dt * 9) - dt * 4);
-        if (netMode === 'host') {
-          snapAccum += dt;
-          if (snapAccum >= 0.04) { snapAccum = 0; sendSnapshot(); }
-        }
       }
       draw();
       requestAnimationFrame(loop);
@@ -1397,7 +1345,7 @@
       keys[k] = true;
       if (e.repeat) return; // discrete actions fire once per press
       if (k === 'm') { muted = !muted; return; }
-      if (k === 'r') { if (netMode !== 'guest') newMatch(); return; }
+      if (k === 'r') { if (netMode === 'online') netSend({ t: 'restart' }); else newMatch(); return; }
       if (k === 'p') {
         if (netMode === 'local' && state !== 'match-over') {
           paused = !paused;
@@ -1406,12 +1354,16 @@
         return;
       }
       if (k === ' ') {
-        if (netMode === 'guest') {
-          if (state === 'serving' && server === 'cpu') netSend({ t: 'msg', data: { k: 'serve' } });
-          else if (state === 'rally') netSend({ t: 'msg', data: { k: 'hit' } });
+        if (netMode === 'online') {
+          if (state === 'serving' && server === 'player') {
+            netSend({ t: 'serve', bias: serveAiming ? serveBias : 0 });
+            serveAiming = false;
+          } else if (state === 'rally') {
+            netSend({ t: 'swing' });
+          }
         } else {
           if (state === 'serving' && server === 'player') {
-            if (serveAiming) fireServe();          // Max: fire the aimed serve
+            if (serveAiming) fireServe();          // rigged: fire the aimed serve
             else { serveBias = 0; doHit('player', true); } // everyone else: plain serve
           } else if (state === 'rally') doHit('player', false);
         }
@@ -1443,75 +1395,58 @@
       if (keys['arrowdown'] || keys['s']) dy += 1;
       return { dx, dy };
     }
-    function sendGuestInput() {
+    // Online is server-authoritative: we only send inputs and render 'state'
+    // snapshots. mySide is 'p1' (near/bottom) or 'p2' (far/top, flipped view).
+    function sendOnlineInput() {
+      if (serveAiming) { netSend({ t: 'input', dx: 0, dy: 0 }); return; } // frozen while aiming
       const v = localMoveVec();
-      netSend({ t: 'msg', data: { k: 'in', dx: v.dx, dy: v.dy } });
-    }
-
-    function sendSnapshot() {
-      netSend({ t: 'msg', data: {
-        k: 's',
-        b: [+ball.x.toFixed(1), +ball.y.toFixed(1), +ball.z.toFixed(1)], bs: ball.shot,
-        p: [+player.x.toFixed(1), +player.y.toFixed(1), +player.swing.toFixed(2), +(player.lean || 0).toFixed(2)],
-        c: [+cpu.x.toFixed(1), +cpu.y.toFixed(1), +cpu.swing.toFixed(2), +(cpu.lean || 0).toFixed(2)],
-        st: state, sv: server,
-        pt: [points.player, points.cpu], gm: [games.player, games.cpu],
-        mg: msgEl.textContent,
-      }});
-    }
-    // Flip host-perspective result text for the guest (guest is the 'cpu' side)
-    function guestMsg(s) {
-      return s
-        .replace(/YOU WIN THE MATCH!/i, 'OPP WINS THE MATCH')
-        .replace(/YOU WIN THE GAME!/i, 'OPP WINS THE GAME')
-        .replace(/CPU WINS THE MATCH/i, 'YOU WIN THE MATCH!')
-        .replace(/CPU WINS THE GAME/i, 'YOU WIN THE GAME!');
-    }
-    function applySnapshot(d) {
-      ball.x = d.b[0]; ball.y = d.b[1]; ball.z = d.b[2]; ball.shot = d.bs;
-      player.x = d.p[0]; player.y = d.p[1]; player.swing = d.p[2]; player.lean = d.p[3];
-      cpu.x = d.c[0]; cpu.y = d.c[1]; cpu.swing = d.c[2]; cpu.lean = d.c[3];
-      state = d.st; server = d.sv;
-      points.player = d.pt[0]; points.cpu = d.pt[1];
-      games.player = d.gm[0]; games.cpu = d.gm[1];
-      let mg;
-      if (d.st === 'serving') mg = (d.sv === 'cpu') ? 'YOUR SERVE — press SPACE' : oppName + ' is serving…';
-      else mg = guestMsg(d.mg);
-      if (msgEl.textContent !== mg) msgEl.textContent = mg;
-      updateHud();
+      netSend({ t: 'input', dx: v.dx, dy: v.dy });
     }
 
     function playSfx(d) {
       if (d.n === 'hit') sHit(d.shot);
       else if (d.n === 'bounce') sBounce();
       else if (d.n === 'net') sNet();
-      else if (d.n === 'point') sPoint(!d.win); // win is from the host's side
+      else if (d.n === 'point') sPoint(d.winner === mySide);
     }
 
-    function onPeerMsg(d) {
-      if (netMode === 'host') {
-        if (d.k === 'in') { guestInput.dx = d.dx; guestInput.dy = d.dy; }
-        else if (d.k === 'hit') remoteSwing = true;
-        else if (d.k === 'serve') remoteServe = true;
-      } else if (netMode === 'guest') {
-        if (d.k === 's') applySnapshot(d);
-        else if (d.k === 'sfx') playSfx(d);
+    // Turn the server's P1/P2 result text into YOU/OPP from my perspective.
+    function localizeMsg(mg, st, sv) {
+      if (st === 'serving') {
+        return (sv === mySide)
+          ? (myRigged ? 'YOUR SERVE — aim ◀ ▶, SPACE' : 'YOUR SERVE — press SPACE')
+          : oppName + ' is serving…';
       }
+      const meTag = mySide === 'p1' ? 'P1' : 'P2';
+      const opTag = mySide === 'p1' ? 'P2' : 'P1';
+      return mg.split(meTag).join('YOU').split(opTag).join('OPP').replace('YOU WINS', 'YOU WIN');
     }
 
-    function startOnline(role, name) {
+    function applyState(d) {
+      const me = mySide, op = mySide === 'p1' ? 'p2' : 'p1';
+      const mi = mySide === 'p1' ? 0 : 1, oi = 1 - mi;
+      ball.x = d.b[0]; ball.y = d.b[1]; ball.z = d.b[2]; ball.shot = d.bs;
+      player.x = d[me][0]; player.y = d[me][1]; player.swing = d[me][2];
+      cpu.x = d[op][0]; cpu.y = d[op][1]; cpu.swing = d[op][2];
+      state = d.st;
+      server = (d.sv === mySide) ? 'player' : 'cpu';
+      points.player = d.pt[mi]; points.cpu = d.pt[oi];
+      games.player = d.gm[mi]; games.cpu = d.gm[oi];
+      const mg = localizeMsg(d.mg, d.st, d.sv);
+      if (msgEl.textContent !== mg) msgEl.textContent = mg;
+      updateHud();
+      if (d.sfx) playSfx(d.sfx);
+    }
+
+    function startOnline(side, name) {
       oppName = name;
-      netMode = role === 'host' ? 'host' : 'guest';
-      flipView = (netMode === 'guest');
-      guestInput = { dx: 0, dy: 0 };
-      remoteSwing = remoteServe = false;
+      netMode = 'online';
+      mySide = side;
+      flipView = (side === 'p2');
+      serveAiming = false;
+      serveBias = 0;
       hideMenus();
-      if (netMode === 'host') {
-        newMatch();
-      } else {
-        state = 'point-pause';
-        msgEl.textContent = 'CONNECTED — vs ' + oppName;
-      }
+      msgEl.textContent = 'vs ' + oppName;
     }
 
     function onOppLeft() {
@@ -1551,7 +1486,7 @@
 
     function onNet(m) {
       switch (m.t) {
-        case 'welcome': myId = m.id; show('menuLobby'); break;
+        case 'welcome': myId = m.id; myRigged = !!m.rigged; show('menuLobby'); break;
         case 'lobby': if (myId) renderLobby(m.players); break;
         case 'challenged':
           challengerId = m.from;
@@ -1559,9 +1494,9 @@
           show('menuChallenge');
           break;
         case 'declined': el('lobbyHint').textContent = 'Challenge declined.'; break;
-        case 'start': startOnline(m.role, m.oppName); break;
+        case 'start': startOnline(m.side, m.oppName); break;
+        case 'state': if (netMode === 'online') applyState(m.data); break;
         case 'oppLeft': onOppLeft(); break;
-        case 'msg': onPeerMsg(m.data); break;
       }
     }
 
@@ -1569,7 +1504,9 @@
       el('netStatus').textContent = 'Connecting…';
       try { ws = new WebSocket(NET_URL); }
       catch (err) { el('netStatus').textContent = 'Bad server URL'; return; }
-      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name }); };
+      let key = '';
+      try { key = localStorage.getItem('tennisRigKey') || ''; } catch (e) {}
+      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name, key }); };
       ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onNet(m); };
       ws.onerror = () => { el('netStatus').textContent = 'Cannot reach server'; };
       ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
@@ -1588,13 +1525,13 @@
     // to remove). The secret never lives in this page — only on the server.
     (function applyUnlockParam() {
       let p; try { p = new URLSearchParams(location.search); } catch (e) { return; }
-      if (p.has('lock')) { try { localStorage.removeItem('tennisRigUnlocked'); } catch (e) {} updateRigBtn(); return; }
+      if (p.has('lock')) { try { localStorage.removeItem('tennisRigKey'); } catch (e) {} updateRigBtn(); return; }
       const key = p.get('unlock');
       if (!key) return;
       const httpBase = NET_URL.replace(/^ws/, 'http');
       fetch(httpBase + '/unlock?key=' + encodeURIComponent(key))
         .then(r => r.json())
-        .then(d => { if (d && d.ok) { try { localStorage.setItem('tennisRigUnlocked', '1'); } catch (e) {} updateRigBtn(); } })
+        .then(d => { if (d && d.ok) { try { localStorage.setItem('tennisRigKey', key); } catch (e) {} updateRigBtn(); } })
         .catch(() => {});
     })();
 
@@ -1611,7 +1548,9 @@
       const name = (el('nameInput').value || '').trim() || 'Player';
       username = name;
       el('netStatus').textContent = 'Joining…';
-      if (!ws) connect(name); else netSend({ t: 'hello', name });
+      let key = '';
+      try { key = localStorage.getItem('tennisRigKey') || ''; } catch (e) {}
+      if (!ws) connect(name); else netSend({ t: 'hello', name, key });
     };
     el('modeName').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnSingle').click(); });
     el('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnJoin').click(); });

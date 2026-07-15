@@ -1,139 +1,134 @@
-// Retro Arcade — Tennis lobby + relay server.
-// Deploy on Render (see ../render.yaml). Clients connect over WebSocket,
-// register a name, see who else is online, challenge each other, and once a
-// match starts every game message is relayed between the two peers.
+// Retro Arcade — Tennis lobby + AUTHORITATIVE match server.
+// Online matches are simulated here (see match.js); browsers only send inputs
+// and render snapshots, so the "rigging" perks — enabled per side from the
+// server-validated `unlock` env var — cannot be forged by a client.
 //
-// Message protocol (JSON both ways):
-//   client -> server
-//     { t:'hello', name }            register / rename
-//     { t:'challenge', to:id }       invite another player
-//     { t:'accept', to:id }          accept an invite (accepter becomes host)
-//     { t:'decline', to:id }
-//     { t:'msg', data }              relayed verbatim to your match peer
-//     { t:'leave' }                  leave the current match
-//   server -> client
-//     { t:'welcome', id }
-//     { t:'lobby', players:[{id,name,busy}] }
-//     { t:'challenged', from:id, name }
-//     { t:'declined', from:id }
-//     { t:'start', role:'host'|'guest', oppName }
-//     { t:'msg', data }
-//     { t:'oppLeft' }
+// client -> server
+//   { t:'hello', name, key }        register; key validated against env.unlock
+//   { t:'challenge', to } / { t:'accept', to } / { t:'decline', to }
+//   { t:'input', dx, dy }           movement (own view; up = -1)
+//   { t:'swing' }                   rally swing
+//   { t:'serve', bias }             serve (bias used only if you're rigged)
+//   { t:'restart' }                 restart after match-over
+//   { t:'leave' }
+// server -> client
+//   { t:'welcome', id, rigged }
+//   { t:'lobby', players:[{id,name,busy}] }
+//   { t:'challenged', from, name } / { t:'declined', from }
+//   { t:'start', side:'p1'|'p2', oppName }
+//   { t:'state', data } (~30Hz)     { t:'oppLeft' }
 
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const { Match } = require('./match');
 
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
-
-  // Rigging unlock check: the secret lives only in the `unlock` env var here,
-  // never in the client. GET /unlock?key=... -> { ok: true|false }
   if (u.pathname === '/unlock') {
     const ok = !!process.env.unlock && u.searchParams.get('key') === process.env.unlock;
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-    });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify({ ok }));
     return;
   }
-
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Retro Arcade Tennis lobby server is running.\n');
+  res.end('Retro Arcade Tennis server is running.\n');
 });
 
 const wss = new WebSocketServer({ server });
-const clients = new Map(); // id -> { id, ws, name, busy, peer }
+const clients = new Map(); // id -> { id, ws, name, busy, peer, rigged, match, side }
 let nextId = 1;
 
-function send(c, obj) {
-  if (c && c.ws.readyState === 1) c.ws.send(JSON.stringify(obj));
-}
-
-function lobbyList() {
-  return [...clients.values()].map(c => ({ id: c.id, name: c.name, busy: c.busy }));
-}
-
+const send = (c, obj) => { if (c && c.ws.readyState === 1) c.ws.send(JSON.stringify(obj)); };
+const lobbyList = () => [...clients.values()].map(c => ({ id: c.id, name: c.name, busy: c.busy }));
 function broadcastLobby() {
   const msg = JSON.stringify({ t: 'lobby', players: lobbyList() });
   for (const c of clients.values()) if (c.ws.readyState === 1) c.ws.send(msg);
 }
 
-function endMatch(client) {
-  const peer = clients.get(client.peer);
-  if (peer) {
-    peer.busy = false;
-    peer.peer = null;
-    send(peer, { t: 'oppLeft' });
+function startMatch(accepter, challenger) {
+  const sim = new Match({ p1: accepter.rigged, p2: challenger.rigged });
+  const m = { sim, players: { p1: accepter, p2: challenger }, interval: null };
+  accepter.match = m; accepter.side = 'p1'; accepter.busy = true; accepter.peer = challenger.id;
+  challenger.match = m; challenger.side = 'p2'; challenger.busy = true; challenger.peer = accepter.id;
+  send(accepter, { t: 'start', side: 'p1', oppName: challenger.name });
+  send(challenger, { t: 'start', side: 'p2', oppName: accepter.name });
+
+  let acc = 0;
+  m.interval = setInterval(() => {
+    sim.tick(1 / 60);
+    if (++acc >= 2) { // ~30Hz snapshots
+      acc = 0;
+      const snap = sim.snapshot();
+      send(accepter, { t: 'state', data: snap });
+      send(challenger, { t: 'state', data: snap });
+    }
+  }, 1000 / 60);
+  broadcastLobby();
+}
+
+function endMatch(m, leaverId) {
+  if (!m) return;
+  clearInterval(m.interval);
+  for (const side of ['p1', 'p2']) {
+    const c = m.players[side];
+    if (!c) continue;
+    c.match = null; c.side = null; c.busy = false; c.peer = null;
+    if (c.id !== leaverId) send(c, { t: 'oppLeft' });
   }
-  client.busy = false;
-  client.peer = null;
+  broadcastLobby();
 }
 
 wss.on('connection', (ws) => {
   const id = nextId++;
-  const client = { id, ws, name: 'Player ' + id, busy: false, peer: null };
+  const client = { id, ws, name: 'Player ' + id, busy: false, peer: null, rigged: false, match: null, side: null };
   clients.set(id, client);
 
   ws.on('message', (raw) => {
-    let m;
-    try { m = JSON.parse(raw); } catch { return; }
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    const sim = client.match && client.match.sim;
 
     switch (m.t) {
       case 'hello':
         client.name = (String(m.name || '').trim().slice(0, 16)) || ('Player ' + id);
-        send(client, { t: 'welcome', id });
+        client.rigged = !!(process.env.unlock && m.key && m.key === process.env.unlock);
+        send(client, { t: 'welcome', id, rigged: client.rigged });
         broadcastLobby();
         break;
 
       case 'challenge': {
-        const target = clients.get(m.to);
-        if (target && !target.busy && !client.busy && target.id !== client.id) {
-          send(target, { t: 'challenged', from: id, name: client.name });
-        }
+        const t = clients.get(m.to);
+        if (t && !t.busy && !client.busy && t.id !== client.id) send(t, { t: 'challenged', from: id, name: client.name });
         break;
       }
-
       case 'accept': {
-        const other = clients.get(m.to);
-        if (other && !other.busy && !client.busy) {
-          client.busy = other.busy = true;
-          client.peer = other.id;
-          other.peer = client.id;
-          // The player who ACCEPTS runs the authoritative simulation (host).
-          send(client, { t: 'start', role: 'host', oppName: other.name });
-          send(other, { t: 'start', role: 'guest', oppName: client.name });
-          broadcastLobby();
-        }
+        const o = clients.get(m.to);
+        if (o && !o.busy && !client.busy) startMatch(client, o); // accepter = p1
         break;
       }
-
       case 'decline': {
-        const other = clients.get(m.to);
-        if (other) send(other, { t: 'declined', from: id });
+        const o = clients.get(m.to);
+        if (o) send(o, { t: 'declined', from: id });
         break;
       }
 
-      case 'msg': {
-        const peer = clients.get(client.peer);
-        if (peer) send(peer, { t: 'msg', data: m.data });
-        break;
-      }
+      case 'input': if (sim) sim.setInput(client.side, m.dx, m.dy); break;
+      case 'swing': if (sim) sim.onSwing(client.side); break;
+      case 'serve': if (sim) sim.onServe(client.side, m.bias); break;
+      case 'restart': if (sim && sim.over) sim.restart(); break;
 
       case 'leave':
-        endMatch(client);
-        broadcastLobby();
+        endMatch(client.match, client.id);
         break;
     }
   });
 
   ws.on('close', () => {
-    endMatch(client);
+    endMatch(client.match, client.id);
     clients.delete(id);
     broadcastLobby();
   });
 });
 
-server.listen(PORT, () => console.log('Tennis lobby server listening on ' + PORT));
+server.listen(PORT, () => console.log('Tennis server listening on ' + PORT));

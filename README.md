@@ -34,8 +34,12 @@ Render via `render.yaml`:
 1. Deploy the repo to Render (it picks up `render.yaml`) or run `cd server && npm install && npm start` locally.
 2. Copy the server's URL and set `NET_URL` near the top of the netplay block in `tennis.html` (e.g. `wss://your-app.onrender.com`, or `ws://localhost:3000` for local testing).
 
-The match is host-authoritative: the player who accepts a challenge runs the
-simulation and streams state to the other, who sends back their inputs.
+Online matches are **server-authoritative**: the Render server runs the match
+simulation (`server/match.js`); both browsers are thin clients that send inputs
+and render the streamed state. Because the game runs on the server, the rigging
+perks — enabled per side from the server-validated `unlock` key — cannot be
+forged in an online match. (Single-player still runs in the browser and is not
+protected.)
 
 The **website stays on GitHub Pages** (`maxvbuda.github.io/retro-arcade/`, with
 tennis at `/retro-arcade/tennis.html`). Render only hosts the multiplayer
