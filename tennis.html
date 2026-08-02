@@ -1316,7 +1316,7 @@
 
       if (netMode === 'online') {
         // thin client: steer serve aim locally, send inputs, render snapshots
-        const wantAim = (state === 'serving' && server === 'player' && myRigged);
+        const wantAim = (state === 'serving' && server === 'player' && myRigged && rigging);
         if (wantAim && !serveAiming) serveBias = 0;
         serveAiming = wantAim;
         if (serveAiming) updateServeAim(dt);
@@ -1506,7 +1506,7 @@
       catch (err) { el('netStatus').textContent = 'Bad server URL'; return; }
       let key = '';
       try { key = localStorage.getItem('tennisRigKey') || ''; } catch (e) {}
-      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name, key }); };
+      ws.onopen = () => { el('netStatus').textContent = ''; netSend({ t: 'hello', name, key, rigOn: rigging }); };
       ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onNet(m); };
       ws.onerror = () => { el('netStatus').textContent = 'Cannot reach server'; };
       ws.onclose = () => { ws = null; myId = null; if (netMode !== 'local') onOppLeft(); };
@@ -1518,7 +1518,11 @@
       el('rigNote').style.display = on ? '' : 'none';
       el('btnRig').textContent = 'RIGGING: ' + (rigging ? 'ON' : 'OFF');
     }
-    el('btnRig').onclick = () => { rigging = !rigging; updateRigBtn(); };
+    el('btnRig').onclick = () => {
+      rigging = !rigging;
+      updateRigBtn();
+      if (netMode === 'online') netSend({ t: 'rig', on: rigging });
+    };
     updateRigBtn();
 
     // Validate an ?unlock=<key> against the server's `unlock` env var (or ?lock
@@ -1550,7 +1554,7 @@
       el('netStatus').textContent = 'Joining…';
       let key = '';
       try { key = localStorage.getItem('tennisRigKey') || ''; } catch (e) {}
-      if (!ws) connect(name); else netSend({ t: 'hello', name, key });
+      if (!ws) connect(name); else netSend({ t: 'hello', name, key, rigOn: rigging });
     };
     el('modeName').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnSingle').click(); });
     el('nameInput').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') el('btnJoin').click(); });

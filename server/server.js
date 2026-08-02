@@ -48,7 +48,10 @@ function broadcastLobby() {
 }
 
 function startMatch(accepter, challenger) {
-  const sim = new Match({ p1: accepter.rigged, p2: challenger.rigged });
+  const sim = new Match({
+    p1: accepter.rigged && accepter.rigOn,
+    p2: challenger.rigged && challenger.rigOn,
+  });
   const m = { sim, players: { p1: accepter, p2: challenger }, interval: null };
   accepter.match = m; accepter.side = 'p1'; accepter.busy = true; accepter.peer = challenger.id;
   challenger.match = m; challenger.side = 'p2'; challenger.busy = true; challenger.peer = accepter.id;
@@ -82,7 +85,7 @@ function endMatch(m, leaverId) {
 
 wss.on('connection', (ws) => {
   const id = nextId++;
-  const client = { id, ws, name: 'Player ' + id, busy: false, peer: null, rigged: false, match: null, side: null };
+  const client = { id, ws, name: 'Player ' + id, busy: false, peer: null, rigged: false, rigOn: true, match: null, side: null };
   clients.set(id, client);
 
   ws.on('message', (raw) => {
@@ -93,8 +96,14 @@ wss.on('connection', (ws) => {
       case 'hello':
         client.name = (String(m.name || '').trim().slice(0, 16)) || ('Player ' + id);
         client.rigged = !!(process.env.unlock && m.key && m.key === process.env.unlock);
+        client.rigOn = (m.rigOn === undefined) ? true : !!m.rigOn;
         send(client, { t: 'welcome', id, rigged: client.rigged });
         broadcastLobby();
+        break;
+
+      case 'rig':
+        client.rigOn = !!m.on;
+        if (sim && client.side) sim.rigged[client.side] = client.rigged && client.rigOn;
         break;
 
       case 'challenge': {
