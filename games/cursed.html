@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cursed Cursor — Retro Arcade</title>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title" style="font-size:28px;">CURSED CURSOR</h1>
+  </header>
+  <div class="game-wrap">
+    <a class="back-link" href="../index.html">&lt; BACK TO ARCADE</a>
+    <div class="hud">
+      <div>SCORE <span id="score">0</span></div>
+      <div>BEST <span id="best">0</span></div>
+      <div>LIVES <span id="lives">♥♥♥</span></div>
+    </div>
+    <canvas id="game" width="480" height="480"></canvas>
+    <div class="overlay-msg" id="msg"></div>
+    <p class="hint">CLICK the canvas to grab the cursor &middot; then CLICK the glowing target<br />your pointer is CURSED — new curses stack as you score &middot; ESC to release</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const scoreEl = document.getElementById('score');
+    const bestEl = document.getElementById('best');
+    const livesEl = document.getElementById('lives');
+    const msgEl = document.getElementById('msg');
+
+    let best = Number(localStorage.getItem('cursed-best') || 0);
+    bestEl.textContent = best;
+
+    // ---- curses: unlocked progressively as score climbs ----
+    const CURSES = [
+      { name: 'INVERT X',  at: 0 },   // horizontal reversed (starts cursed immediately)
+      { name: 'INVERT Y',  at: 2 },   // vertical reversed
+      { name: 'LAGGY',     at: 4 },   // cursor drags behind your hand
+      { name: 'DRIFT',     at: 6 },   // constant sideways pull
+      { name: 'SPIN',      at: 8 },   // your motion is rotated
+      { name: 'JITTER',    at: 11 },  // twitchy random noise
+      { name: 'SLIPPERY',  at: 14 },  // momentum, no brakes
+    ];
+    const has = (name) => {
+      const c = CURSES.find(c => c.name === name);
+      return c && score >= c.at;
+    };
+
+    let score, lives, state; // state: 'idle' | 'playing' | 'over'
+    let cx, cy;          // drawn cursor position
+    let dx0, dy0;        // desired (intended) position, before lag/slip
+    let vX, vY;          // velocity (for SLIPPERY)
+    let driftDir, spinAng, sens;
+    let target, tLeft, tMax;
+    let ghosts;          // trailing cursor positions
+    let glitchBlocks;    // decorative glitch rectangles
+    let flashT, shakeT;  // feedback timers
+    let lastTs;
+
+    function reset() {
+      score = 0;
+      lives = 3;
+      state = 'idle';
+      cx = W / 2; cy = H / 2;
+      dx0 = cx; dy0 = cy;
+      vX = 0; vY = 0;
+      driftDir = Math.random() < 0.5 ? -1 : 1;
+      spinAng = 0;
+      sens = 1;
+      ghosts = [];
+      glitchBlocks = [];
+      flashT = 0; shakeT = 0;
+      target = null;
+      updateHud();
+      msgEl.textContent = 'CLICK TO GRAB THE CURSED CURSOR';
+    }
+
+    function updateHud() {
+      scoreEl.textContent = score;
+      bestEl.textContent = best;
+      livesEl.textContent = lives > 0 ? '♥'.repeat(lives) : '—';
+    }
+
+    function spawnTarget() {
+      const r = Math.max(16, 30 - score * 0.6);
+      const m = r + 14;
+      target = {
+        x: m + Math.random() * (W - 2 * m),
+        y: m + Math.random() * (H - 2 * m),
+        r,
+      };
+      tMax = Math.max(1.6, 4.2 - score * 0.14);
+      tLeft = tMax;
+    }
+
+    function startGame() {
+      score = 0; lives = 3; state = 'playing';
+      cx = W / 2; cy = H / 2; dx0 = cx; dy0 = cy; vX = 0; vY = 0;
+      spinAng = (Math.random() * 0.6 - 0.3);
+      driftDir = Math.random() < 0.5 ? -1 : 1;
+      ghosts = [];
+      updateHud();
+      msgEl.textContent = '';
+      spawnTarget();
+    }
+
+    // ---- pointer lock so we read raw motion deltas and can corrupt them ----
+    canvas.addEventListener('click', () => {
+      if (document.pointerLockElement !== canvas) {
+        canvas.requestPointerLock();
+      }
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement === canvas) {
+        if (state === 'idle' || state === 'over') startGame();
+      } else {
+        if (state === 'playing') {
+          state = 'idle';
+          msgEl.textContent = 'PAUSED — CLICK TO GRAB THE CURSOR AGAIN';
+        }
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement !== canvas || state !== 'playing') return;
+      let mx = e.movementX * sens;
+      let my = e.movementY * sens;
+
+      // SPIN: rotate your intended motion by an angle
+      if (has('SPIN')) {
+        const a = spinAng;
+        const rx = mx * Math.cos(a) - my * Math.sin(a);
+        const ry = mx * Math.sin(a) + my * Math.cos(a);
+        mx = rx; my = ry;
+      }
+      // INVERT: the whole point of the game
+      if (has('INVERT X')) mx = -mx;
+      if (has('INVERT Y')) my = -my;
+      // JITTER: twitchy noise
+      if (has('JITTER')) {
+        mx += (Math.random() - 0.5) * 10;
+        my += (Math.random() - 0.5) * 10;
+      }
+
+      if (has('SLIPPERY')) {
+        vX += mx * 0.6;
+        vY += my * 0.6;
+      } else {
+        dx0 += mx;
+        dy0 += my;
+      }
+    });
+
+    // clicking (the mousedown fires even while pointer-locked)
+    canvas.addEventListener('mousedown', (e) => {
+      if (document.pointerLockElement !== canvas || state !== 'playing') return;
+      if (!target) return;
+      const d = Math.hypot(cx - target.x, cy - target.y);
+      if (d <= target.r + 4) {
+        score++;
+        if (score > best) { best = score; localStorage.setItem('cursed-best', best); }
+        // re-roll a fresh spin angle each hit so SPIN stays disorienting
+        spinAng = (Math.random() * 1.2 - 0.6);
+        driftDir = Math.random() < 0.5 ? -1 : 1;
+        flashT = 0.25;
+        const newly = CURSES.find(c => c.at === score);
+        if (newly) msgEl.textContent = 'NEW CURSE: ' + newly.name;
+        else msgEl.textContent = '';
+        updateHud();
+        spawnTarget();
+      } else {
+        loseLife('MISS!');
+      }
+    });
+
+    function loseLife(reason) {
+      lives--;
+      shakeT = 0.35;
+      updateHud();
+      if (lives <= 0) {
+        state = 'over';
+        target = null;
+        document.exitPointerLock();
+        msgEl.textContent = 'CURSED OUT — SCORE ' + score + ' · CLICK TO TRY AGAIN';
+      } else {
+        msgEl.textContent = reason + ' (' + lives + ' left)';
+        spawnTarget();
+      }
+    }
+
+    // ---- update ----
+    function update(dt) {
+      if (state !== 'playing') return;
+
+      // DRIFT: a steady pull that fights you
+      if (has('DRIFT')) {
+        dx0 += driftDir * 34 * dt;
+        dy0 += Math.sin(performance.now() / 700) * 22 * dt;
+      }
+
+      if (has('SLIPPERY')) {
+        dx0 += vX;
+        dy0 += vY;
+        vX *= 0.92; vY *= 0.92; // barely any friction
+      }
+
+      dx0 = Math.max(0, Math.min(W, dx0));
+      dy0 = Math.max(0, Math.min(H, dy0));
+
+      // LAGGY: drawn cursor chases the intended position slowly
+      const lag = has('LAGGY') ? 0.12 : 0.55;
+      cx += (dx0 - cx) * lag;
+      cy += (dy0 - cy) * lag;
+
+      // cursor trail
+      ghosts.unshift({ x: cx, y: cy });
+      if (ghosts.length > 7) ghosts.pop();
+
+      // timer
+      tLeft -= dt;
+      if (tLeft <= 0) loseLife('TOO SLOW');
+
+      if (flashT > 0) flashT -= dt;
+      if (shakeT > 0) shakeT -= dt;
+
+      // random decorative glitch blocks
+      if (Math.random() < 0.25) {
+        glitchBlocks.push({
+          x: Math.random() * W, y: Math.random() * H,
+          w: 20 + Math.random() * 90, h: 3 + Math.random() * 10,
+          life: 0.12 + Math.random() * 0.12,
+          hue: Math.random() < 0.5 ? '#ff2e88' : '#2ee8ff',
+        });
+      }
+      glitchBlocks = glitchBlocks.filter(g => (g.life -= dt) > 0);
+    }
+
+    // ---- draw ----
+    function drawUglyCursor(x, y) {
+      // trailing ghosts
+      for (let i = ghosts.length - 1; i >= 0; i--) {
+        const g = ghosts[i];
+        ctx.globalAlpha = 0.06 * (ghosts.length - i);
+        drawArrow(g.x, g.y, i % 2 ? '#ff2e88' : '#2ee8ff', 1);
+      }
+      ctx.globalAlpha = 1;
+
+      // per-frame jitter + RGB channel split — looks broken on purpose
+      const jx = has('JITTER') ? (Math.random() - 0.5) * 6 : (Math.random() - 0.5) * 1.5;
+      const jy = has('JITTER') ? (Math.random() - 0.5) * 6 : (Math.random() - 0.5) * 1.5;
+      ctx.globalAlpha = 0.7;
+      drawArrow(x + jx - 3, y + jy, '#ff0044', 1.05);      // red channel
+      drawArrow(x + jx + 3, y + jy + 1, '#00e5ff', 1.05);  // cyan channel
+      ctx.globalAlpha = 1;
+      drawArrow(x + jx, y + jy, '#f4f4f4', 1);              // main
+    }
+
+    function drawArrow(x, y, color, scale) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      ctx.beginPath();
+      // a lopsided, corrupted arrow (wrong hotspot, jagged edge)
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 20);
+      ctx.lineTo(5, 15);
+      ctx.lineTo(9, 23);
+      ctx.lineTo(12, 21);
+      ctx.lineTo(8, 13);
+      ctx.lineTo(15, 12);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function draw() {
+      let ox = 0, oy = 0;
+      if (shakeT > 0) { ox = (Math.random() - 0.5) * 10; oy = (Math.random() - 0.5) * 10; }
+      ctx.save();
+      ctx.translate(ox, oy);
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(-12, -12, W + 24, H + 24);
+
+      // faint scanlines
+      ctx.fillStyle = 'rgba(46,232,255,0.03)';
+      for (let y = 0; y < H; y += 4) ctx.fillRect(0, y, W, 1);
+
+      if (flashT > 0) {
+        ctx.fillStyle = 'rgba(46,255,136,' + (flashT * 0.5) + ')';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // target
+      if (target && state === 'playing') {
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 120);
+        const frac = tLeft / tMax;
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, target.r + 6 + pulse * 4, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,230,46,' + (0.4 + pulse * 0.4) + ')';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffe62e';
+        ctx.shadowColor = '#ffe62e';
+        ctx.shadowBlur = 18;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, target.r * 0.45, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff2e88';
+        ctx.fill();
+
+        // timer ring
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, target.r + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+        ctx.strokeStyle = frac < 0.3 ? '#ff2e88' : '#2eff88';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+
+      // decorative glitch blocks
+      for (const g of glitchBlocks) {
+        ctx.globalAlpha = Math.min(1, g.life * 6);
+        ctx.fillStyle = g.hue;
+        ctx.fillRect(g.x, g.y, g.w, g.h);
+      }
+      ctx.globalAlpha = 1;
+
+      if (state === 'playing') drawUglyCursor(cx, cy);
+
+      // active-curse readout
+      if (state === 'playing') {
+        const active = CURSES.filter(c => score >= c.at).map(c => c.name);
+        ctx.font = "9px 'Press Start 2P', monospace";
+        ctx.fillStyle = 'rgba(255,46,136,0.85)';
+        ctx.textAlign = 'left';
+        let ty = 16;
+        for (const a of active) { ctx.fillText('▪ ' + a, 8, ty); ty += 13; }
+        ctx.textAlign = 'start';
+      }
+
+      if (state !== 'playing') {
+        ctx.font = "12px 'Press Start 2P', monospace";
+        ctx.fillStyle = '#2ee8ff';
+        ctx.textAlign = 'center';
+        ctx.fillText(state === 'over' ? 'CURSED OUT' : 'CLICK TO PLAY', W / 2, H / 2 - 6);
+        ctx.font = "9px 'Press Start 2P', monospace";
+        ctx.fillStyle = '#888';
+        ctx.fillText('grab the cursor & click the target', W / 2, H / 2 + 16);
+        ctx.textAlign = 'start';
+      }
+
+      ctx.restore();
+    }
+
+    function loop(ts) {
+      if (!lastTs) lastTs = ts;
+      let dt = (ts - lastTs) / 1000;
+      lastTs = ts;
+      if (dt > 0.05) dt = 0.05;
+      update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    reset();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

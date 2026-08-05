@@ -21,6 +21,7 @@ Then go to `http://localhost:8000`.
 - **Space Invaders** — defend Earth across escalating waves.
 - **Pac-Man** — clear a freshly generated maze every game, dodge four ghosts with distinct chase behaviors, and hunt them back down with power pellets.
 - **Tennis** — rally against the CPU with real serve/fault rules, deuce scoring, directional timing-aim, lobs and slams; first to 4 games wins the match. Also has an **Online** mode: enter a name, see who else is in the lobby, and challenge a friend.
+- **Cursed Cursor** — click the target with a pointer that's actively sabotaged: inverted axes, lag, drift, spin, jitter and momentum stack as your score climbs, and the cursor itself renders as a glitchy, broken arrow.
 
 ## Stack
 
