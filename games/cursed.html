@@ -38,12 +38,14 @@
     // ---- curses: unlocked progressively as score climbs ----
     const CURSES = [
       { name: 'INVERT X',  at: 0 },   // horizontal reversed (starts cursed immediately)
-      { name: 'INVERT Y',  at: 2 },   // vertical reversed
-      { name: 'LAGGY',     at: 4 },   // cursor drags behind your hand
-      { name: 'DRIFT',     at: 6 },   // constant sideways pull
-      { name: 'SPIN',      at: 8 },   // your motion is rotated
-      { name: 'JITTER',    at: 11 },  // twitchy random noise
-      { name: 'SLIPPERY',  at: 14 },  // momentum, no brakes
+      { name: 'INVERT Y',  at: 1 },   // vertical reversed
+      { name: 'LAGGY',     at: 2 },   // cursor drags behind your hand
+      { name: 'DRIFT',     at: 3 },   // constant sideways pull
+      { name: 'SPIN',      at: 5 },   // your motion is rotated
+      { name: 'JITTER',    at: 7 },   // twitchy random noise
+      { name: 'DECOY',     at: 8 },   // fake targets that cost a life
+      { name: 'MOVING',    at: 9 },   // the target runs from you
+      { name: 'SLIPPERY',  at: 11 },  // momentum, no brakes
     ];
     const has = (name) => {
       const c = CURSES.find(c => c.name === name);
@@ -55,7 +57,7 @@
     let dx0, dy0;        // desired (intended) position, before lag/slip
     let vX, vY;          // velocity (for SLIPPERY)
     let driftDir, spinAng, sens;
-    let target, tLeft, tMax;
+    let target, tLeft, tMax, decoys = [];
     let ghosts;          // trailing cursor positions
     let glitchBlocks;    // decorative glitch rectangles
     let flashT, shakeT;  // feedback timers
@@ -75,6 +77,7 @@
       glitchBlocks = [];
       flashT = 0; shakeT = 0;
       target = null;
+      decoys = [];
       updateHud();
       msgEl.textContent = 'CLICK TO GRAB THE CURSED CURSOR';
     }
@@ -85,16 +88,31 @@
       livesEl.textContent = lives > 0 ? '♥'.repeat(lives) : '—';
     }
 
+    function randPos(m) {
+      return { x: m + Math.random() * (W - 2 * m), y: m + Math.random() * (H - 2 * m) };
+    }
+
     function spawnTarget() {
-      const r = Math.max(16, 30 - score * 0.6);
+      const r = Math.max(11, 28 - score * 0.9);
       const m = r + 14;
-      target = {
-        x: m + Math.random() * (W - 2 * m),
-        y: m + Math.random() * (H - 2 * m),
-        r,
-      };
-      tMax = Math.max(1.6, 4.2 - score * 0.14);
+      const p = randPos(m);
+      // MOVING: give the target a velocity that ramps with score
+      const spd = has('MOVING') ? Math.min(140, 55 + score * 5) : 0;
+      const ang = Math.random() * Math.PI * 2;
+      target = { x: p.x, y: p.y, r, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, m };
+      tMax = Math.max(1.0, 3.6 - score * 0.17);
       tLeft = tMax;
+
+      // DECOY: spawn fake look-alike targets that cost a life if clicked
+      decoys = [];
+      if (has('DECOY')) {
+        const n = Math.min(4, 1 + Math.floor((score - 8) / 3));
+        for (let i = 0; i < n; i++) {
+          const dp = randPos(r + 14);
+          if (Math.hypot(dp.x - target.x, dp.y - target.y) < r * 3) continue;
+          decoys.push({ x: dp.x, y: dp.y, r });
+        }
+      }
     }
 
     function startGame() {
@@ -143,8 +161,8 @@
       if (has('INVERT Y')) my = -my;
       // JITTER: twitchy noise
       if (has('JITTER')) {
-        mx += (Math.random() - 0.5) * 10;
-        my += (Math.random() - 0.5) * 10;
+        mx += (Math.random() - 0.5) * 16;
+        my += (Math.random() - 0.5) * 16;
       }
 
       if (has('SLIPPERY')) {
@@ -160,6 +178,10 @@
     canvas.addEventListener('mousedown', (e) => {
       if (document.pointerLockElement !== canvas || state !== 'playing') return;
       if (!target) return;
+      // clicking a DECOY costs a life
+      for (const dc of decoys) {
+        if (Math.hypot(cx - dc.x, cy - dc.y) <= dc.r + 4) { loseLife('DECOY!'); return; }
+      }
       const d = Math.hypot(cx - target.x, cy - target.y);
       if (d <= target.r + 4) {
         score++;
@@ -199,8 +221,16 @@
 
       // DRIFT: a steady pull that fights you
       if (has('DRIFT')) {
-        dx0 += driftDir * 34 * dt;
-        dy0 += Math.sin(performance.now() / 700) * 22 * dt;
+        dx0 += driftDir * 55 * dt;
+        dy0 += Math.sin(performance.now() / 700) * 40 * dt;
+      }
+
+      // MOVING: target bounces around the arena
+      if (target && (target.vx || target.vy)) {
+        target.x += target.vx * dt;
+        target.y += target.vy * dt;
+        if (target.x < target.m || target.x > W - target.m) { target.vx *= -1; target.x = Math.max(target.m, Math.min(W - target.m, target.x)); }
+        if (target.y < target.m || target.y > H - target.m) { target.vy *= -1; target.y = Math.max(target.m, Math.min(H - target.m, target.y)); }
       }
 
       if (has('SLIPPERY')) {
@@ -279,6 +309,27 @@
       ctx.restore();
     }
 
+    function drawTargetDisc(x, y, r, pulse) {
+      ctx.beginPath();
+      ctx.arc(x, y, r + 6 + pulse * 4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,230,46,' + (0.4 + pulse * 0.4) + ')';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffe62e';
+      ctx.shadowColor = '#ffe62e';
+      ctx.shadowBlur = 18;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.45, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff2e88';
+      ctx.fill();
+    }
+
     function draw() {
       let ox = 0, oy = 0;
       if (shakeT > 0) { ox = (Math.random() - 0.5) * 10; oy = (Math.random() - 0.5) * 10; }
@@ -297,35 +348,20 @@
         ctx.fillRect(0, 0, W, H);
       }
 
-      // target
-      if (target && state === 'playing') {
+      if (state === 'playing') {
         const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 120);
-        const frac = tLeft / tMax;
-        ctx.beginPath();
-        ctx.arc(target.x, target.y, target.r + 6 + pulse * 4, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255,230,46,' + (0.4 + pulse * 0.4) + ')';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffe62e';
-        ctx.shadowColor = '#ffe62e';
-        ctx.shadowBlur = 18;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        ctx.beginPath();
-        ctx.arc(target.x, target.y, target.r * 0.45, 0, Math.PI * 2);
-        ctx.fillStyle = '#ff2e88';
-        ctx.fill();
-
-        // timer ring
-        ctx.beginPath();
-        ctx.arc(target.x, target.y, target.r + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
-        ctx.strokeStyle = frac < 0.3 ? '#ff2e88' : '#2eff88';
-        ctx.lineWidth = 3;
-        ctx.stroke();
+        // decoys look identical to the real thing — no way to tell but to guess wrong
+        for (const dc of decoys) drawTargetDisc(dc.x, dc.y, dc.r, pulse);
+        // real target
+        if (target) {
+          drawTargetDisc(target.x, target.y, target.r, pulse);
+          const frac = tLeft / tMax;
+          ctx.beginPath();
+          ctx.arc(target.x, target.y, target.r + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+          ctx.strokeStyle = frac < 0.3 ? '#ff2e88' : '#2eff88';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
       }
 
       // decorative glitch blocks
