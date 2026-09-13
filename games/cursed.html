@@ -41,6 +41,7 @@
       { name: 'INVERT Y',  at: 1 },   // vertical reversed
       { name: 'LAGGY',     at: 2 },   // cursor drags behind your hand
       { name: 'DRIFT',     at: 3 },   // constant sideways pull
+      { name: 'TOUCHY',    at: 4 },   // tiny hand movements become huge jumps
       { name: 'SPIN',      at: 5 },   // your motion is rotated
       { name: 'JITTER',    at: 7 },   // twitchy random noise
       { name: 'DECOY',     at: 8 },   // fake targets that cost a life
@@ -148,6 +149,9 @@
       if (document.pointerLockElement !== canvas || state !== 'playing') return;
       let mx = e.movementX * sens;
       let my = e.movementY * sens;
+
+      // TOUCHY: a small nudge of the real mouse becomes a huge cursor jump
+      if (has('TOUCHY')) { mx *= 3.2; my *= 3.2; }
 
       // SPIN: rotate your intended motion by an angle
       if (has('SPIN')) {
