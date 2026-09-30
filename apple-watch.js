@@ -1,9 +1,59 @@
 // Apple Watch Mode — squeezes the whole page onto a tiny wrist-sized screen.
-// Purely cosmetic: shrinks the page into a watch-shaped frame with CSS.
-// Games still run underneath at full resolution, just tiny and cramped —
-// exactly the "Apple Watch experience" you asked for.
+// Real Apple Watch browsers have no keyboard, so every game here (Snake,
+// Pong, Breakout, Tetris, Invaders, Pac-Man, Tennis) would otherwise be
+// unplayable — they all listen for arrow keys + Space on `window`. This
+// adds a touch D-pad that dispatches those same key events, so the games
+// underneath don't know the difference.
 (function () {
   var STORAGE_KEY = 'retro-arcade-watch-mode';
+
+  function dispatchKey(type, key, repeat) {
+    var evt;
+    try {
+      evt = new KeyboardEvent(type, { key: key, bubbles: true, cancelable: true, repeat: !!repeat });
+    } catch (e) {
+      evt = document.createEvent('Event');
+      evt.initEvent(type, true, true);
+      evt.key = key;
+      evt.repeat = !!repeat;
+    }
+    window.dispatchEvent(evt);
+  }
+
+  function wireButton(btn) {
+    var key = btn.getAttribute('data-key');
+    var delayId = null;
+    var intervalId = null;
+
+    function stopTimers() {
+      clearTimeout(delayId);
+      clearInterval(intervalId);
+      delayId = null;
+      intervalId = null;
+    }
+
+    function start(e) {
+      e.preventDefault();
+      if (delayId || intervalId) return;
+      dispatchKey('keydown', key, false);
+      delayId = setTimeout(function () {
+        intervalId = setInterval(function () { dispatchKey('keydown', key, true); }, 90);
+      }, 350);
+    }
+
+    function stop(e) {
+      if (e) e.preventDefault();
+      if (!delayId && !intervalId) return;
+      stopTimers();
+      dispatchKey('keyup', key, false);
+    }
+
+    btn.addEventListener('pointerdown', start);
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerleave', stop);
+    btn.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  }
 
   function init() {
     var content = document.createElement('div');
@@ -25,6 +75,23 @@
     var sideBtn = document.createElement('div');
     sideBtn.className = 'watch-side-btn';
     document.body.appendChild(sideBtn);
+
+    var controls = document.createElement('div');
+    controls.className = 'watch-controls';
+    controls.innerHTML =
+      '<div class="watch-dpad">' +
+        '<button type="button" class="watch-btn wd-up" data-key="ArrowUp">▲</button>' +
+        '<button type="button" class="watch-btn wd-left" data-key="ArrowLeft">◀</button>' +
+        '<button type="button" class="watch-btn wd-right" data-key="ArrowRight">▶</button>' +
+        '<button type="button" class="watch-btn wd-down" data-key="ArrowDown">▼</button>' +
+      '</div>' +
+      '<div class="watch-side-controls">' +
+        '<button type="button" class="watch-btn watch-action" data-key=" ">●</button>' +
+        '<button type="button" class="watch-btn watch-reset" data-key="r">R</button>' +
+      '</div>';
+    document.body.appendChild(controls);
+    var buttons = controls.querySelectorAll('[data-key]');
+    for (var i = 0; i < buttons.length; i++) wireButton(buttons[i]);
 
     function label(on) {
       return on ? '⌘ EXIT APPLE WATCH MODE' : '⌘ APPLE WATCH MODE';

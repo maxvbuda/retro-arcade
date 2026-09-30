@@ -208,7 +208,7 @@ html.watch-mode {
 
 html.watch-mode #watch-content {
   position: fixed;
-  top: 50%;
+  top: 40%;
   left: 50%;
   width: 396px;
   height: 484px;
@@ -230,7 +230,7 @@ html.watch-mode .watch-crown {
   width: 10px;
   height: 46px;
   left: calc(50% + 85px);
-  top: calc(50% - 32px);
+  top: calc(40% - 32px);
 }
 
 html.watch-mode .watch-side-btn {
@@ -238,9 +238,92 @@ html.watch-mode .watch-side-btn {
   width: 8px;
   height: 30px;
   left: calc(50% + 85px);
-  top: calc(50% + 26px);
+  top: calc(40% + 26px);
 }
 
 html.watch-mode .watch-toggle-btn {
   z-index: 1001;
+}
+
+.watch-controls {
+  display: none;
+  position: fixed;
+  left: 50%;
+  top: calc(40% + 120px);
+  transform: translateX(-50%);
+  z-index: 1002;
+  align-items: center;
+  gap: 26px;
+}
+
+html.watch-mode .watch-controls {
+  display: flex;
+}
+
+.watch-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 32px);
+  grid-template-rows: repeat(3, 32px);
+  gap: 3px;
+}
+
+.watch-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  color: var(--neon-cyan);
+  background: var(--bg-panel);
+  border: 2px solid var(--neon-cyan);
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-shadow: 0 0 8px rgba(46, 232, 255, 0.35);
+}
+
+.watch-btn:active {
+  background: var(--neon-cyan);
+  color: #000;
+}
+
+.wd-up    { grid-column: 2; grid-row: 1; }
+.wd-left  { grid-column: 1; grid-row: 2; }
+.wd-right { grid-column: 3; grid-row: 2; }
+.wd-down  { grid-column: 2; grid-row: 3; }
+
+.watch-side-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.watch-action {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--neon-yellow);
+  border-color: var(--neon-yellow);
+  box-shadow: 0 0 8px rgba(255, 230, 46, 0.4);
+}
+
+.watch-action:active {
+  background: var(--neon-yellow);
+}
+
+.watch-reset {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--neon-pink);
+  border-color: var(--neon-pink);
+  font-size: 9px;
+  box-shadow: 0 0 8px rgba(255, 46, 136, 0.4);
+}
+
+.watch-reset:active {
+  background: var(--neon-pink);
 }
