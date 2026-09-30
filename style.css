@@ -167,3 +167,80 @@ canvas {
   color: #555;
   padding: 32px 16px;
 }
+
+/* ---- Apple Watch Mode ---- */
+.watch-toggle-btn {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: var(--neon-green);
+  background: var(--bg-panel);
+  border: 2px solid var(--neon-green);
+  border-radius: 20px;
+  padding: 10px 16px;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(46, 255, 136, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.watch-toggle-btn:hover {
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 0 16px rgba(46, 255, 136, 0.7);
+}
+
+.watch-crown,
+.watch-side-btn {
+  display: none;
+  position: fixed;
+  z-index: 999;
+  background: linear-gradient(90deg, #4a4a4d, #8a8a8f, #2a2a2c);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px #000;
+}
+
+html.watch-mode {
+  overflow: hidden;
+}
+
+html.watch-mode #watch-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 396px;
+  height: 484px;
+  overflow: auto;
+  background: var(--bg);
+  transform: translate(-50%, -50%) scale(0.44);
+  transform-origin: center center;
+  border: 12px solid #1c1c1e;
+  border-radius: 54px;
+  box-shadow:
+    0 0 0 3px #000,
+    0 0 0 5px #3a3a3d,
+    0 25px 70px rgba(0, 0, 0, 0.85),
+    inset 0 0 24px rgba(0, 0, 0, 0.6);
+}
+
+html.watch-mode .watch-crown {
+  display: block;
+  width: 10px;
+  height: 46px;
+  left: calc(50% + 85px);
+  top: calc(50% - 32px);
+}
+
+html.watch-mode .watch-side-btn {
+  display: block;
+  width: 8px;
+  height: 30px;
+  left: calc(50% + 85px);
+  top: calc(50% + 26px);
+}
+
+html.watch-mode .watch-toggle-btn {
+  z-index: 1001;
+}
