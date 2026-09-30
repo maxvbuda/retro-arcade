@@ -192,56 +192,58 @@ canvas {
   box-shadow: 0 0 16px rgba(46, 255, 136, 0.7);
 }
 
+/* The page itself is never resized — games stay fully playable at their
+   normal desktop size. "Watch mode" is just a cosmetic bezel overlay
+   plus a touch D-pad pinned to the viewport, so nothing ever scrolls
+   off-screen regardless of how tall a page's content is. */
+.watch-bezel {
+  display: none;
+  position: fixed;
+  inset: 10px;
+  z-index: 998;
+  pointer-events: none;
+  border: 10px solid #1c1c1e;
+  border-radius: 40px;
+  box-shadow:
+    0 0 0 3px #000,
+    0 0 0 5px #3a3a3d,
+    inset 0 0 40px rgba(0, 0, 0, 0.5);
+}
+
+html.watch-mode .watch-bezel {
+  display: block;
+}
+
+/* reserve room at the bottom of the normal page flow so the fixed
+   D-pad/toggle overlay never covers the game itself */
+html.watch-mode #watch-content {
+  padding-bottom: 170px;
+}
+
 .watch-crown,
 .watch-side-btn {
   display: none;
   position: fixed;
   z-index: 999;
   background: linear-gradient(90deg, #4a4a4d, #8a8a8f, #2a2a2c);
-  border-radius: 4px;
+  border-radius: 6px;
   box-shadow: 0 0 0 2px #000;
-}
-
-html.watch-mode {
-  overflow: hidden;
-}
-
-html.watch-mode #watch-content {
-  position: fixed;
-  top: 40%;
-  left: 50%;
-  /* Sized to the page's real, normal-mode dimensions (set by JS via
-     getBoundingClientRect before the transform is applied) — nothing
-     is force-fit or cropped, it's just scaled down uniformly. */
-  width: var(--watch-w, 480px);
-  height: var(--watch-h, 480px);
-  overflow: hidden;
-  background: var(--bg);
-  transform: translate(-50%, -50%) scale(var(--watch-scale, 0.44));
-  transform-origin: center center;
-  border: 12px solid #1c1c1e;
-  border-radius: 54px;
-  box-shadow:
-    0 0 0 3px #000,
-    0 0 0 5px #3a3a3d,
-    0 25px 70px rgba(0, 0, 0, 0.85),
-    inset 0 0 24px rgba(0, 0, 0, 0.6);
 }
 
 html.watch-mode .watch-crown {
   display: block;
-  width: 10px;
-  height: 46px;
-  left: calc(50% + (var(--watch-w, 480px) * var(--watch-scale, 0.44) / 2) + 3px);
-  top: calc(40% - 23px);
+  width: 14px;
+  height: 64px;
+  right: 6px;
+  top: calc(50% - 90px);
 }
 
 html.watch-mode .watch-side-btn {
   display: block;
-  width: 8px;
-  height: 30px;
-  left: calc(50% + (var(--watch-w, 480px) * var(--watch-scale, 0.44) / 2) + 3px);
-  top: calc(40% + 15px);
+  width: 12px;
+  height: 42px;
+  right: 6px;
+  top: calc(50% - 4px);
 }
 
 html.watch-mode .watch-toggle-btn {
@@ -252,7 +254,7 @@ html.watch-mode .watch-toggle-btn {
   display: none;
   position: fixed;
   left: 50%;
-  top: calc(40% + (var(--watch-h, 480px) * var(--watch-scale, 0.44) / 2) + 34px);
+  bottom: 84px;
   transform: translateX(-50%);
   z-index: 1002;
   align-items: center;
