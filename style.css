@@ -210,11 +210,14 @@ html.watch-mode #watch-content {
   position: fixed;
   top: 40%;
   left: 50%;
-  width: 396px;
-  height: 484px;
-  overflow: auto;
+  /* Sized to the page's real, normal-mode dimensions (set by JS via
+     getBoundingClientRect before the transform is applied) — nothing
+     is force-fit or cropped, it's just scaled down uniformly. */
+  width: var(--watch-w, 480px);
+  height: var(--watch-h, 480px);
+  overflow: hidden;
   background: var(--bg);
-  transform: translate(-50%, -50%) scale(0.44);
+  transform: translate(-50%, -50%) scale(var(--watch-scale, 0.44));
   transform-origin: center center;
   border: 12px solid #1c1c1e;
   border-radius: 54px;
@@ -229,16 +232,16 @@ html.watch-mode .watch-crown {
   display: block;
   width: 10px;
   height: 46px;
-  left: calc(50% + 85px);
-  top: calc(40% - 32px);
+  left: calc(50% + (var(--watch-w, 480px) * var(--watch-scale, 0.44) / 2) + 3px);
+  top: calc(40% - 23px);
 }
 
 html.watch-mode .watch-side-btn {
   display: block;
   width: 8px;
   height: 30px;
-  left: calc(50% + 85px);
-  top: calc(40% + 26px);
+  left: calc(50% + (var(--watch-w, 480px) * var(--watch-scale, 0.44) / 2) + 3px);
+  top: calc(40% + 15px);
 }
 
 html.watch-mode .watch-toggle-btn {
@@ -249,7 +252,7 @@ html.watch-mode .watch-toggle-btn {
   display: none;
   position: fixed;
   left: 50%;
-  top: calc(40% + 120px);
+  top: calc(40% + (var(--watch-h, 480px) * var(--watch-scale, 0.44) / 2) + 34px);
   transform: translateX(-50%);
   z-index: 1002;
   align-items: center;

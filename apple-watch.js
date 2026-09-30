@@ -97,7 +97,24 @@
       return on ? '⌘ EXIT APPLE WATCH MODE' : '⌘ APPLE WATCH MODE';
     }
 
+    // Measure the page at its real, normal-mode size (no watch transform
+    // applied) so the watch frame is exactly that size, just scaled down —
+    // nothing gets force-fit, cropped, or squashed into an arbitrary box.
+    function measure() {
+      document.documentElement.classList.remove('watch-mode');
+      var rect = content.getBoundingClientRect();
+      var w = Math.max(1, Math.round(rect.width));
+      var h = Math.max(1, Math.round(rect.height));
+      var scale = Math.min(190 / w, 230 / h, 0.6);
+      scale = Math.max(scale, 0.06);
+      var root = document.documentElement.style;
+      root.setProperty('--watch-w', w + 'px');
+      root.setProperty('--watch-h', h + 'px');
+      root.setProperty('--watch-scale', scale.toFixed(4));
+    }
+
     function setMode(on) {
+      if (on) measure();
       document.documentElement.classList.toggle('watch-mode', on);
       btn.textContent = label(on);
       try { localStorage.setItem(STORAGE_KEY, on ? '1' : '0'); } catch (e) {}
@@ -105,6 +122,13 @@
 
     btn.addEventListener('click', function () {
       setMode(!document.documentElement.classList.contains('watch-mode'));
+    });
+
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (!document.documentElement.classList.contains('watch-mode')) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () { setMode(true); }, 120);
     });
 
     var saved = false;
